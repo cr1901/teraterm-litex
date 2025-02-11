@@ -6,9 +6,9 @@ use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use log::*;
 use once_cell::sync::OnceCell;
 use rfd::FileDialog;
-use log::*;
 use stderrlog;
 use teraterm as tt;
 
@@ -99,8 +99,8 @@ unsafe extern "C" fn ttx_init(ts: tt::PTTSet, cv: tt::PComVar) {
 unsafe extern "C" fn ttx_open_file(hooks: *mut tt::TTXFileHooks) {
     if let Err(e) = with_state_var(|s| {
         // SAFETY: Assumes TeraTerm passed us valid pointers.
-        s.orig_readfile =  *(*hooks).PReadFile;
-        s.orig_writefile =  *(*hooks).PWriteFile;
+        s.orig_readfile = *(*hooks).PReadFile;
+        s.orig_writefile = *(*hooks).PWriteFile;
         *(*hooks).PReadFile = Some(our_p_read_file);
         *(*hooks).PWriteFile = Some(our_p_write_file);
 
@@ -130,16 +130,21 @@ unsafe extern "C" fn ttx_close_file(hooks: *mut tt::TTXFileHooks) {
     }
 }
 
-
 #[allow(unused)]
-unsafe extern "C" fn our_p_write_file(fh: *mut c_void, buff: *const c_void, len: u32, written_bytes: *mut u32, wol: *mut OVERLAPPED) -> i32 {
+unsafe extern "C" fn our_p_write_file(
+    fh: *mut c_void,
+    buff: *const c_void,
+    len: u32,
+    written_bytes: *mut u32,
+    wol: *mut OVERLAPPED,
+) -> i32 {
     trace!(target: "our_p_write_file", "Entered");
 
     match with_state_var(|s| {
         if let Some(write_file) = s.orig_writefile {
             return Ok(write_file);
         } else {
-            return Err(Error::WasEmpty("PWriteFile"))
+            return Err(Error::WasEmpty("PWriteFile"));
         }
     }) {
         Ok(wf) => {
@@ -154,19 +159,25 @@ unsafe extern "C" fn our_p_write_file(fh: *mut c_void, buff: *const c_void, len:
 }
 
 #[allow(unused)]
-unsafe extern "C" fn our_p_read_file(fh: *mut c_void, buff: *mut c_void, len: u32, read_bytes: *mut u32, wol: *mut OVERLAPPED) -> i32 {
+unsafe extern "C" fn our_p_read_file(
+    fh: *mut c_void,
+    buff: *mut c_void,
+    len: u32,
+    read_bytes: *mut u32,
+    wol: *mut OVERLAPPED,
+) -> i32 {
     trace!(target: "our_p_read_file", "Entered");
 
     match with_state_var(|s| {
         if let Some(read_file) = s.orig_readfile {
             return Ok(read_file);
         } else {
-            return Err(Error::WasEmpty("PReadFile"))
+            return Err(Error::WasEmpty("PReadFile"));
         }
     }) {
         Ok(rf) => {
             trace!(target: "our_p_read_file", "Running original PReadFile at {:?}.", rf);
-            return rf(fh, buff, len, read_bytes, wol)
+            return rf(fh, buff, len, read_bytes, wol);
         }
         Err(e) => {
             error!(target: "our_p_read_file", "Could not call original PWriteFile: {}", e);
@@ -187,7 +198,8 @@ unsafe extern "C" fn ttx_modify_menu(menu: HMENU) {
             MF_ENABLED | MF_STRING,
             ID_MENU_LITEX,
             PCWSTR(u16cstr!("LiteX").as_ptr()),
-        ).map_err(|e| Error::WinError(e))?;
+        )
+        .map_err(|e| Error::WinError(e))?;
 
         Ok(())
     }) {
@@ -282,7 +294,7 @@ unsafe extern "system" fn litex_setup_dialog(
                         info!(target: "setup_dialog", "Plugin now actively searching for magic string.");
                         s.activity = Activity::Active {
                             file: kernel_path.unwrap(),
-                            boot_addr: boot_addr.unwrap()
+                            boot_addr: boot_addr.unwrap(),
                         };
                         Ok(())
                     }) {
@@ -317,7 +329,10 @@ unsafe extern "system" fn litex_setup_dialog(
     return false.into();
 }
 
-fn with_state_var<T, F>(f: F) -> Result<T, Error> where F: FnOnce(&mut State) -> Result<T, Error> {
+fn with_state_var<T, F>(f: F) -> Result<T, Error>
+where
+    F: FnOnce(&mut State) -> Result<T, Error>,
+{
     let mut state_guard = TTX_LITEX_STATE
         .try_lock()
         .map_err(|_| Error::CouldntUnlock("TTXState"))?;
