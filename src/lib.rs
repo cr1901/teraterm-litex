@@ -1,6 +1,7 @@
 mod teraterm;
 
-use std::ffi::CStr;
+use std::ffi::{CStr, OsString};
+use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -8,7 +9,8 @@ use once_cell::sync::OnceCell;
 use rfd::FileDialog;
 use teraterm as tt;
 
-use windows::core::PCSTR;
+use widestring::{u16cstr, U16CString, U16String};
+use windows::core::{PCSTR, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::System::SystemServices::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -80,11 +82,11 @@ unsafe extern "C" fn ttx_modify_menu(menu: HMENU) {
                     // never updated?
                     s.transfer_menu = Some(GetSubMenu(s.file_menu.unwrap(), 11));
 
-                    let res = AppendMenuA(
+                    let res = AppendMenuW(
                         s.transfer_menu.unwrap(),
                         MF_ENABLED | MF_STRING,
                         ID_MENU_LITEX,
-                        PCSTR(c"LiteX".as_ptr() as *const u8),
+                        PCWSTR(u16cstr!("LiteX").as_ptr()),
                     );
                     if let Err(r) = res {
                         eprintln!("Could not add menu: {}", r);
@@ -101,8 +103,35 @@ unsafe extern "C" fn ttx_modify_menu(menu: HMENU) {
     }
 }
 
+fn get_buf_len(dialog: HWND, control: i32) -> Result<usize, windows::core::Error> {
+    let control_handle = unsafe { GetDlgItem(Some(dialog), control)? };
+    let maybe_buf_len = unsafe { GetWindowTextLengthW(control_handle) };
+
+    let maybe_error = windows::core::Error::from_win32();
+    if maybe_buf_len == 0 && maybe_error.code().0 != 0 {
+        return Err(maybe_error);
+    } else {
+        return Ok(maybe_buf_len as usize);
+    }
+}
+
+fn get_dlg_osstring(dialog: HWND, control: i32) -> Result<OsString, windows::core::Error> {
+    let code_unit_len = get_buf_len(dialog, control)?;
+    let mut code_str: Vec<u16> = vec![0; code_unit_len + 1];
+    let used_len = unsafe { GetDlgItemTextW(dialog, control, &mut code_str) } as usize;
+
+    // We don't need the null terminator.
+    code_str.truncate(used_len);
+
+    if used_len == 0 {
+        return Err(windows::core::Error::from_win32());
+    } else {
+        return Ok(OsString::from_wide(&code_str));
+    }
+}
+
 unsafe extern "system" fn litex_setup_dialog(
-    window: HWND,
+    dialog: HWND,
     msg: u32,
     param_1: WPARAM,
     _param_2: LPARAM,
@@ -110,59 +139,51 @@ unsafe extern "system" fn litex_setup_dialog(
     match msg {
         WM_INITDIALOG => {
             // TODO:
-            // * Init with already-filled values.
             // * Center Window
-
-            // SendMessage(EM_SETLIMITTEXT);
+            // * SendMessage(EM_SETLIMITTEXT);
+            let _ = SetDlgItemTextW(dialog, IDC_LITEX_BOOT_ADDR as i32, PCWSTR(u16cstr!("0x40000000").as_ptr()));
             return true.into();
         }
         WM_COMMAND => {
             match param_1.0 as i32 {
                 p if p == IDOK.0 => {
-                    let mut kernel_file: [u8; 256] = [0; 256];
-                    let _ =
-                        GetDlgItemTextA(window, IDC_LITEX_KERNEL as i32, &mut kernel_file[0..255]);
+                    let kernel_path = match get_dlg_osstring(dialog, IDC_LITEX_KERNEL as i32) {
+                        Ok(kpath) => Some(PathBuf::from(kpath)),
+                        Err(e) => {
+                            eprintln!("Could not get kernel path buffer {:?}", e);
+                            None
+                        }
+                    };
 
-                    let mut rust_str = String::from_utf8_lossy(&kernel_file).into_owned();
-
-                    if let Some((first, _)) = rust_str.char_indices().find(|(_, c)| *c == '\0') {
-                        rust_str.truncate(first);
-                    }
-
-                    let kernel_path = Some(PathBuf::from(rust_str));
-
-                    eprintln!("Got kernel path: {:?}", kernel_path);
-
-                    let mut boot_bytes: [u8; 17] = [0; 17];
-                    let mut boot_addr = None;
-                    let _ =
-                        GetDlgItemTextA(window, IDC_LITEX_BOOT_ADDR as i32, &mut boot_bytes[0..16]);
-
-                    // Try a few ways of parsing the boot address.
-                    if let Ok(boot_cstr) = CStr::from_bytes_until_nul(&boot_bytes) {
-                        if let Ok(boot_str) = boot_cstr.to_str() {
+                    let boot_addr = match get_dlg_osstring(dialog, IDC_LITEX_BOOT_ADDR as i32)
+                        .map(|os| os.to_string_lossy().into_owned())
+                    {
+                        Ok(boot_str) => {
                             if boot_str.starts_with("0X") || boot_str.starts_with("0x") {
                                 let no_prefix = &boot_str[2..];
-
-                                if let Ok(addr) = u32::from_str_radix(no_prefix, 16) {
-                                    boot_addr = Some(addr);
-                                }
+                                u32::from_str_radix(no_prefix, 16).ok()
                             } else {
-                                if let Ok(addr) = u32::from_str_radix(boot_str, 10) {
-                                    boot_addr = Some(addr);
-                                } else if let Ok(addr) = u32::from_str_radix(boot_str, 16) {
-                                    boot_addr = Some(addr);
+                                if let Ok(addr) = u32::from_str_radix(&boot_str, 10) {
+                                    Some(addr)
+                                } else {
+                                    u32::from_str_radix(&boot_str, 16).ok()
                                 }
                             }
-
-                            eprintln!("Got boot address: {:?}", boot_addr)
                         }
-                    }
+                        Err(e) => {
+                            eprintln!("Could not get boot address: {:?}", e);
+                            None
+                        }
+                    };
+
+                    eprintln!("Got kernel path: {:?}", kernel_path);
+                    eprintln!("Got boot address: {:?}", boot_addr);
 
                     if kernel_path.is_some() && boot_addr.is_some() {
                         match TTX_LITEX_STATE.try_lock() {
                             Ok(mut g) => match &mut *g {
                                 Some(ref mut s) => {
+                                    eprintln!("Plugin now actively searching for magic string.");
                                     s.activity = Activity::Active {
                                         file: kernel_path.unwrap(),
                                         boot_addr: boot_addr.unwrap(),
@@ -178,20 +199,21 @@ unsafe extern "system" fn litex_setup_dialog(
                         }
                     }
 
-                    let _ = EndDialog(window, IDOK.0 as isize);
+                    let _ = EndDialog(dialog, IDOK.0 as isize);
                     return true.into();
                 }
                 p if p == IDCANCEL.0 => {
-                    let _ = EndDialog(window, IDCANCEL.0 as isize);
+                    let _ = EndDialog(dialog, IDCANCEL.0 as isize);
                     return true.into();
                 }
                 p if p == IDC_LITEX_CHOOSE_KERNEL_BUTTON as i32 => {
                     if let Some(path) = FileDialog::new().add_filter("kernel", &["bin"]).pick_file()
                     {
-                        if let Err(e) = SetDlgItemTextA(
-                            window,
+                        let widepath = U16CString::from_os_str_truncate(path.as_os_str());
+                        if let Err(e) = SetDlgItemTextW(
+                            dialog,
                             IDC_LITEX_KERNEL as i32,
-                            PCSTR(path.to_string_lossy().as_bytes().as_ptr()),
+                            PCWSTR(widepath.as_ptr()),
                         ) {
                             eprintln!("Could not set kernel file path: {}", e);
                         }
@@ -213,9 +235,9 @@ unsafe extern "C" fn ttx_process_command(window: HWND, cmd: u16) -> i32 {
             if let Ok(hc) = OUR_HINST.try_lock() {
                 if let Some(hinst) = hc.get() {
                     eprintln!("Invoking dialog box.");
-                    let res = DialogBoxParamA(
+                    let res = DialogBoxParamW(
                         Some(hinst.0),
-                        PCSTR(IDD_SETUP_LITEX as *const u8),
+                        PCWSTR(IDD_SETUP_LITEX as *const u16),
                         Some(window),
                         Some(Some(litex_setup_dialog)),
                         LPARAM(0),
