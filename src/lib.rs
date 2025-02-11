@@ -1,6 +1,6 @@
 mod teraterm;
 
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -28,15 +28,12 @@ struct State {
     orig_writefile: tt::TWriteFile,
     file_menu: Option<HMENU>,
     transfer_menu: Option<HMENU>,
-    activity: Activity
+    activity: Activity,
 }
 
 enum Activity {
     Inactive,
-    Active {
-        file: PathBuf,
-        boot_addr: u32
-    }
+    Active { file: PathBuf, boot_addr: u32 },
 }
 
 unsafe impl Send for OurHInstance {}
@@ -56,7 +53,7 @@ unsafe extern "C" fn ttx_init(ts: tt::PTTSet, cv: tt::PComVar) {
                 orig_writefile: None,
                 file_menu: None,
                 transfer_menu: None,
-                activity: Activity::Inactive
+                activity: Activity::Inactive,
             })
         }
         Err(_) => {
@@ -104,22 +101,27 @@ unsafe extern "C" fn ttx_modify_menu(menu: HMENU) {
     }
 }
 
-
-unsafe extern "system" fn litex_setup_dialog(window: HWND, msg: u32, param_1: WPARAM, _param_2: LPARAM) -> isize {
+unsafe extern "system" fn litex_setup_dialog(
+    window: HWND,
+    msg: u32,
+    param_1: WPARAM,
+    _param_2: LPARAM,
+) -> isize {
     match msg {
         WM_INITDIALOG => {
-            // TODO: 
+            // TODO:
             // * Init with already-filled values.
             // * Center Window
 
             // SendMessage(EM_SETLIMITTEXT);
             return true.into();
-        },
+        }
         WM_COMMAND => {
             match param_1.0 as i32 {
                 p if p == IDOK.0 => {
                     let mut kernel_file: [u8; 256] = [0; 256];
-                    let _ = GetDlgItemTextA(window, IDC_LITEX_KERNEL as i32, &mut kernel_file[0..255]);
+                    let _ =
+                        GetDlgItemTextA(window, IDC_LITEX_KERNEL as i32, &mut kernel_file[0..255]);
 
                     let mut rust_str = String::from_utf8_lossy(&kernel_file).into_owned();
 
@@ -133,8 +135,9 @@ unsafe extern "system" fn litex_setup_dialog(window: HWND, msg: u32, param_1: WP
 
                     let mut boot_bytes: [u8; 17] = [0; 17];
                     let mut boot_addr = None;
-                    let _ = GetDlgItemTextA(window, IDC_LITEX_BOOT_ADDR as i32, &mut boot_bytes[0..16]);
-                    
+                    let _ =
+                        GetDlgItemTextA(window, IDC_LITEX_BOOT_ADDR as i32, &mut boot_bytes[0..16]);
+
                     // Try a few ways of parsing the boot address.
                     if let Ok(boot_cstr) = CStr::from_bytes_until_nul(&boot_bytes) {
                         if let Ok(boot_str) = boot_cstr.to_str() {
@@ -158,16 +161,17 @@ unsafe extern "system" fn litex_setup_dialog(window: HWND, msg: u32, param_1: WP
 
                     if kernel_path.is_some() && boot_addr.is_some() {
                         match TTX_LITEX_STATE.try_lock() {
-                            Ok(mut g) => {
-                                match &mut *g {
-                                    Some(ref mut s) => {
-                                        s.activity = Activity::Active { file: kernel_path.unwrap(), boot_addr: boot_addr.unwrap() };
-                                    }
-                                    None => {
-                                        eprintln!("Could not unlock state. Plugin cannot do anything.");
-                                    }
+                            Ok(mut g) => match &mut *g {
+                                Some(ref mut s) => {
+                                    s.activity = Activity::Active {
+                                        file: kernel_path.unwrap(),
+                                        boot_addr: boot_addr.unwrap(),
+                                    };
                                 }
-                            }
+                                None => {
+                                    eprintln!("Could not unlock state. Plugin cannot do anything.");
+                                }
+                            },
                             Err(_) => {
                                 eprintln!("Could not modify menu. Plugin cannot do anything.");
                             }
@@ -176,21 +180,24 @@ unsafe extern "system" fn litex_setup_dialog(window: HWND, msg: u32, param_1: WP
 
                     let _ = EndDialog(window, IDOK.0 as isize);
                     return true.into();
-                },
+                }
                 p if p == IDCANCEL.0 => {
                     let _ = EndDialog(window, IDCANCEL.0 as isize);
                     return true.into();
-                },
+                }
                 p if p == IDC_LITEX_CHOOSE_KERNEL_BUTTON as i32 => {
-                    if let Some(path) = FileDialog::new()
-                        .add_filter("kernel", &["bin"])
-                        .pick_file() {
-                            if let Err(e) = SetDlgItemTextA(window, IDC_LITEX_KERNEL as i32, PCSTR(path.to_string_lossy().as_bytes().as_ptr())) {
-                                eprintln!("Could not set kernel file path: {}", e);
-                            }
+                    if let Some(path) = FileDialog::new().add_filter("kernel", &["bin"]).pick_file()
+                    {
+                        if let Err(e) = SetDlgItemTextA(
+                            window,
+                            IDC_LITEX_KERNEL as i32,
+                            PCSTR(path.to_string_lossy().as_bytes().as_ptr()),
+                        ) {
+                            eprintln!("Could not set kernel file path: {}", e);
                         }
+                    }
                     eprintln!("Choose Kernel Button");
-                },
+                }
                 _ => {}
             }
         }
