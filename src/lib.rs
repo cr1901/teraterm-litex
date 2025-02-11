@@ -1,6 +1,7 @@
 mod teraterm;
 
 use std::ffi::OsString;
+use std::fmt;
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -38,6 +39,28 @@ enum Activity {
     Active { file: PathBuf, boot_addr: u32 },
 }
 
+enum Error {
+    CouldntUnlock(&'static str),
+    WasEmpty(&'static str),
+    WinError(windows::core::Error),
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::CouldntUnlock(var) => {
+                write!(f, "couldnt unlock state var {}", var)
+            }
+            Error::WasEmpty(var) => {
+                write!(f, "state var {} was empty when it shouldn't have", var)
+            }
+            Error::WinError(e) => {
+                write!(f, "Windows error: {}", e)
+            }
+        }
+    }
+}
+
 unsafe impl Send for OurHInstance {}
 
 struct OurHInstance(HINSTANCE);
@@ -73,33 +96,22 @@ unsafe extern "C" fn ttx_openfile(hooks: *mut tt::TTXFileHooks) {
 }
 
 unsafe extern "C" fn ttx_modify_menu(menu: HMENU) {
-    match TTX_LITEX_STATE.try_lock() {
-        Ok(mut g) => {
-            match &mut *g {
-                Some(ref mut s) => {
-                    s.file_menu = Some(GetSubMenu(menu, tt::ID_FILE as i32));
-                    // ID_TRANSFER == 9 and doesn't work. Was the constant
-                    // never updated?
-                    s.transfer_menu = Some(GetSubMenu(s.file_menu.unwrap(), 11));
+    if let Err(e) = with_state_var(|s| {
+        s.file_menu = Some(GetSubMenu(menu, tt::ID_FILE as i32));
+        // ID_TRANSFER == 9 and doesn't work. Was the constant
+        // never updated?
+        s.transfer_menu = Some(GetSubMenu(s.file_menu.unwrap(), 11));
 
-                    let res = AppendMenuW(
-                        s.transfer_menu.unwrap(),
-                        MF_ENABLED | MF_STRING,
-                        ID_MENU_LITEX,
-                        PCWSTR(u16cstr!("LiteX").as_ptr()),
-                    );
-                    if let Err(r) = res {
-                        eprintln!("Could not add menu: {}", r);
-                    }
-                }
-                None => {
-                    eprintln!("Could not unlock state. Plugin cannot do anything.");
-                }
-            }
-        }
-        Err(_) => {
-            eprintln!("Could not modify menu. Plugin cannot do anything.");
-        }
+        AppendMenuW(
+            s.transfer_menu.unwrap(),
+            MF_ENABLED | MF_STRING,
+            ID_MENU_LITEX,
+            PCWSTR(u16cstr!("LiteX").as_ptr()),
+        ).map_err(|e| Error::WinError(e))?;
+
+        Ok(())
+    }) {
+        eprintln!("Could not modify menu: {}", e);
     }
 }
 
@@ -162,6 +174,7 @@ unsafe extern "system" fn litex_setup_dialog(
                     .map(|os| os.to_string_lossy().into_owned())
                 {
                     Ok(boot_str) => {
+                        // Attempt to parse various forms of the address.
                         if boot_str.starts_with("0X") || boot_str.starts_with("0x") {
                             let no_prefix = &boot_str[2..];
                             u32::from_str_radix(no_prefix, 16).ok()
@@ -183,22 +196,15 @@ unsafe extern "system" fn litex_setup_dialog(
                 eprintln!("Got boot address: {:?}", boot_addr);
 
                 if kernel_path.is_some() && boot_addr.is_some() {
-                    match TTX_LITEX_STATE.try_lock() {
-                        Ok(mut g) => match &mut *g {
-                            Some(ref mut s) => {
-                                eprintln!("Plugin now actively searching for magic string.");
-                                s.activity = Activity::Active {
-                                    file: kernel_path.unwrap(),
-                                    boot_addr: boot_addr.unwrap(),
-                                };
-                            }
-                            None => {
-                                eprintln!("Could not unlock state. Plugin cannot do anything.");
-                            }
-                        },
-                        Err(_) => {
-                            eprintln!("Could not modify menu. Plugin cannot do anything.");
-                        }
+                    if let Err(e) = with_state_var(|s| {
+                        eprintln!("Plugin now actively searching for magic string.");
+                        s.activity = Activity::Active {
+                            file: kernel_path.unwrap(),
+                            boot_addr: boot_addr.unwrap()
+                        };
+                        Ok(())
+                    }) {
+                        eprintln!("Could not move plugin to active state: {}", e);
                     }
                 }
 
@@ -228,27 +234,44 @@ unsafe extern "system" fn litex_setup_dialog(
     return false.into();
 }
 
+fn with_state_var<F>(f: F) -> Result<(), Error> where F: FnOnce(&mut State) -> Result<(), Error> {
+    let mut state_guard = TTX_LITEX_STATE
+        .try_lock()
+        .map_err(|_| Error::CouldntUnlock("TTXState"))?;
+
+    let state = state_guard.as_mut().ok_or(Error::WasEmpty("TTXState"))?;
+
+    f(state)
+}
+
+fn get_hinst_var() -> Result<HINSTANCE, Error> {
+    let hinst_guard = OUR_HINST
+        .try_lock()
+        .map_err(|_| Error::CouldntUnlock("OurHInstance"))?;
+    let hinst = hinst_guard.get().ok_or(Error::WasEmpty("OurHInstance"))?;
+
+    Ok(hinst.0)
+}
+
 unsafe extern "C" fn ttx_process_command(window: HWND, cmd: u16) -> i32 {
     match cmd as usize {
         ID_MENU_LITEX => {
-            if let Ok(hc) = OUR_HINST.try_lock() {
-                if let Some(hinst) = hc.get() {
-                    eprintln!("Invoking dialog box.");
-                    let res = DialogBoxParamW(
-                        Some(hinst.0),
-                        PCWSTR(IDD_SETUP_LITEX as *const u16),
-                        Some(window),
-                        Some(Some(litex_setup_dialog)),
-                        LPARAM(0),
-                    );
-                    if res <= 0 {
-                        eprintln!("error invoking dialog: {:?}", GetLastError());
-                    }
+            if let Err(e) = get_hinst_var().and_then(|hinst| {
+                let res = DialogBoxParamW(
+                    Some(hinst),
+                    PCWSTR(IDD_SETUP_LITEX as *const u16),
+                    Some(window),
+                    Some(Some(litex_setup_dialog)),
+                    LPARAM(0),
+                );
+
+                if res <= 0 {
+                    Err(Error::WinError(GetLastError().into()))
                 } else {
-                    eprintln!("Could not get OurHInstance.");
+                    Ok(())
                 }
-            } else {
-                eprintln!("Could not unlock OurHInstance.");
+            }) {
+                eprintln!("Could not open LiteX dialog: {}", e)
             }
 
             eprintln!("LiteX option clicked.");
