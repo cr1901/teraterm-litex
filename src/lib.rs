@@ -1,6 +1,6 @@
 mod teraterm;
 
-use std::ffi::{CStr, OsString};
+use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -9,8 +9,8 @@ use once_cell::sync::OnceCell;
 use rfd::FileDialog;
 use teraterm as tt;
 
-use widestring::{u16cstr, U16CString, U16String};
-use windows::core::{PCSTR, PCWSTR};
+use widestring::{u16cstr, U16CString};
+use windows::core::PCWSTR;
 use windows::Win32::Foundation::*;
 use windows::Win32::System::SystemServices::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -141,88 +141,87 @@ unsafe extern "system" fn litex_setup_dialog(
             // TODO:
             // * Center Window
             // * SendMessage(EM_SETLIMITTEXT);
-            let _ = SetDlgItemTextW(dialog, IDC_LITEX_BOOT_ADDR as i32, PCWSTR(u16cstr!("0x40000000").as_ptr()));
+            let _ = SetDlgItemTextW(
+                dialog,
+                IDC_LITEX_BOOT_ADDR as i32,
+                PCWSTR(u16cstr!("0x40000000").as_ptr()),
+            );
             return true.into();
         }
-        WM_COMMAND => {
-            match param_1.0 as i32 {
-                p if p == IDOK.0 => {
-                    let kernel_path = match get_dlg_osstring(dialog, IDC_LITEX_KERNEL as i32) {
-                        Ok(kpath) => Some(PathBuf::from(kpath)),
-                        Err(e) => {
-                            eprintln!("Could not get kernel path buffer {:?}", e);
-                            None
-                        }
-                    };
+        WM_COMMAND => match param_1.0 as i32 {
+            p if p == IDOK.0 => {
+                let kernel_path = match get_dlg_osstring(dialog, IDC_LITEX_KERNEL as i32) {
+                    Ok(kpath) => Some(PathBuf::from(kpath)),
+                    Err(e) => {
+                        eprintln!("Could not get kernel path buffer {:?}", e);
+                        None
+                    }
+                };
 
-                    let boot_addr = match get_dlg_osstring(dialog, IDC_LITEX_BOOT_ADDR as i32)
-                        .map(|os| os.to_string_lossy().into_owned())
-                    {
-                        Ok(boot_str) => {
-                            if boot_str.starts_with("0X") || boot_str.starts_with("0x") {
-                                let no_prefix = &boot_str[2..];
-                                u32::from_str_radix(no_prefix, 16).ok()
+                let boot_addr = match get_dlg_osstring(dialog, IDC_LITEX_BOOT_ADDR as i32)
+                    .map(|os| os.to_string_lossy().into_owned())
+                {
+                    Ok(boot_str) => {
+                        if boot_str.starts_with("0X") || boot_str.starts_with("0x") {
+                            let no_prefix = &boot_str[2..];
+                            u32::from_str_radix(no_prefix, 16).ok()
+                        } else {
+                            if let Ok(addr) = u32::from_str_radix(&boot_str, 10) {
+                                Some(addr)
                             } else {
-                                if let Ok(addr) = u32::from_str_radix(&boot_str, 10) {
-                                    Some(addr)
-                                } else {
-                                    u32::from_str_radix(&boot_str, 16).ok()
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Could not get boot address: {:?}", e);
-                            None
-                        }
-                    };
-
-                    eprintln!("Got kernel path: {:?}", kernel_path);
-                    eprintln!("Got boot address: {:?}", boot_addr);
-
-                    if kernel_path.is_some() && boot_addr.is_some() {
-                        match TTX_LITEX_STATE.try_lock() {
-                            Ok(mut g) => match &mut *g {
-                                Some(ref mut s) => {
-                                    eprintln!("Plugin now actively searching for magic string.");
-                                    s.activity = Activity::Active {
-                                        file: kernel_path.unwrap(),
-                                        boot_addr: boot_addr.unwrap(),
-                                    };
-                                }
-                                None => {
-                                    eprintln!("Could not unlock state. Plugin cannot do anything.");
-                                }
-                            },
-                            Err(_) => {
-                                eprintln!("Could not modify menu. Plugin cannot do anything.");
+                                u32::from_str_radix(&boot_str, 16).ok()
                             }
                         }
                     }
+                    Err(e) => {
+                        eprintln!("Could not get boot address: {:?}", e);
+                        None
+                    }
+                };
 
-                    let _ = EndDialog(dialog, IDOK.0 as isize);
-                    return true.into();
-                }
-                p if p == IDCANCEL.0 => {
-                    let _ = EndDialog(dialog, IDCANCEL.0 as isize);
-                    return true.into();
-                }
-                p if p == IDC_LITEX_CHOOSE_KERNEL_BUTTON as i32 => {
-                    if let Some(path) = FileDialog::new().add_filter("kernel", &["bin"]).pick_file()
-                    {
-                        let widepath = U16CString::from_os_str_truncate(path.as_os_str());
-                        if let Err(e) = SetDlgItemTextW(
-                            dialog,
-                            IDC_LITEX_KERNEL as i32,
-                            PCWSTR(widepath.as_ptr()),
-                        ) {
-                            eprintln!("Could not set kernel file path: {}", e);
+                eprintln!("Got kernel path: {:?}", kernel_path);
+                eprintln!("Got boot address: {:?}", boot_addr);
+
+                if kernel_path.is_some() && boot_addr.is_some() {
+                    match TTX_LITEX_STATE.try_lock() {
+                        Ok(mut g) => match &mut *g {
+                            Some(ref mut s) => {
+                                eprintln!("Plugin now actively searching for magic string.");
+                                s.activity = Activity::Active {
+                                    file: kernel_path.unwrap(),
+                                    boot_addr: boot_addr.unwrap(),
+                                };
+                            }
+                            None => {
+                                eprintln!("Could not unlock state. Plugin cannot do anything.");
+                            }
+                        },
+                        Err(_) => {
+                            eprintln!("Could not modify menu. Plugin cannot do anything.");
                         }
                     }
-                    eprintln!("Choose Kernel Button");
                 }
-                _ => {}
+
+                let _ = EndDialog(dialog, IDOK.0 as isize);
+                return true.into();
             }
-        }
+            p if p == IDCANCEL.0 => {
+                let _ = EndDialog(dialog, IDCANCEL.0 as isize);
+                return true.into();
+            }
+            p if p == IDC_LITEX_CHOOSE_KERNEL_BUTTON as i32 => {
+                if let Some(path) = FileDialog::new().add_filter("kernel", &["bin"]).pick_file() {
+                    let widepath = U16CString::from_os_str_truncate(path.as_os_str());
+                    if let Err(e) =
+                        SetDlgItemTextW(dialog, IDC_LITEX_KERNEL as i32, PCWSTR(widepath.as_ptr()))
+                    {
+                        eprintln!("Could not set kernel file path: {}", e);
+                    }
+                }
+                eprintln!("Choose Kernel Button");
+            }
+            _ => {}
+        },
         _ => {}
     }
 
