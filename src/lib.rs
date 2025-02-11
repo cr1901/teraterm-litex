@@ -1,6 +1,6 @@
 mod teraterm;
 
-use std::ffi::OsString;
+use std::ffi::{c_void, OsString};
 use std::fmt;
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
@@ -8,12 +8,15 @@ use std::sync::Mutex;
 
 use once_cell::sync::OnceCell;
 use rfd::FileDialog;
+use log::*;
+use stderrlog;
 use teraterm as tt;
 
 use widestring::{u16cstr, U16CString};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::*;
 use windows::Win32::System::SystemServices::*;
+use windows::Win32::System::IO::OVERLAPPED;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 pub const ID_MENU_LITEX: usize = 56000;
@@ -69,6 +72,12 @@ static TTX_LITEX_STATE: Mutex<Option<State>> = Mutex::new(None);
 static OUR_HINST: Mutex<OnceCell<OurHInstance>> = Mutex::new(OnceCell::new());
 
 unsafe extern "C" fn ttx_init(ts: tt::PTTSet, cv: tt::PComVar) {
+    if cfg!(debug_assertions) {
+        let _ = stderrlog::new().verbosity(log::Level::Trace).init();
+    } else {
+        let _ = stderrlog::new().quiet(true).init();
+    }
+
     match TTX_LITEX_STATE.try_lock() {
         Ok(mut s) => {
             *s = Some(State {
@@ -82,17 +91,88 @@ unsafe extern "C" fn ttx_init(ts: tt::PTTSet, cv: tt::PComVar) {
             })
         }
         Err(_) => {
-            eprintln!("Could not set state. Plugin cannot do anything.");
+            error!(target: "TTXInit", "Could not set state. Plugin cannot do anything.");
         }
     }
 }
 
-unsafe extern "C" fn ttx_openfile(hooks: *mut tt::TTXFileHooks) {
-    // SAFETY assumes that TeraTerm gave us a proper struct.
+unsafe extern "C" fn ttx_open_file(hooks: *mut tt::TTXFileHooks) {
+    if let Err(e) = with_state_var(|s| {
+        // SAFETY: Assumes TeraTerm passed us valid pointers.
+        s.orig_readfile =  *(*hooks).PReadFile;
+        s.orig_writefile =  *(*hooks).PWriteFile;
+        *(*hooks).PReadFile = Some(our_p_read_file);
+        *(*hooks).PWriteFile = Some(our_p_write_file);
 
-    todo!()
-    // (&raw mut (*hooks).PReadFile).write(TTX_EXPORTS.loadOrder);
-    // (&raw mut (*hooks).PWriteFile).write(TTX_EXPORTS.loadOrder);
+        trace!(target: "TTXOpenFile", "s.orig_readfile <= {:?} ({:?})", &raw const s.orig_readfile, s.orig_readfile);
+        trace!(target: "TTXOpenFile", "s.orig_writefile <= {:?} ({:?})", &raw const s.orig_writefile, s.orig_writefile);
+        trace!(target: "TTXOpenFile", "*(*hooks).PReadFile <= {:?}", our_p_read_file as * const ());
+        trace!(target: "TTXOpenFile", "*(*hooks).PWriteFile <= {:?}", our_p_write_file as * const ());
+
+        Ok(())
+    }) {
+        error!(target: "TTXOpenFile", "Could not prepare serial port: {}", e);
+    }
+}
+
+unsafe extern "C" fn ttx_close_file(hooks: *mut tt::TTXFileHooks) {
+    if let Err(e) = with_state_var(|s| {
+        // SAFETY: Assumes TeraTerm passed us valid pointers.
+        *(*hooks).PReadFile = s.orig_readfile;
+        *(*hooks).PWriteFile = s.orig_writefile;
+
+        trace!(target: "TTXCloseFile", "*(*hooks).PReadFile <= {:?}", *(*hooks).PReadFile);
+        trace!(target: "TTXCloseFile", "*(*hooks).PWriteFile <= {:?}", *(*hooks).PWriteFile);
+
+        Ok(())
+    }) {
+        error!(target: "TTXCloseFile", "Could not close serial port: {}", e);
+    }
+}
+
+
+#[allow(unused)]
+unsafe extern "C" fn our_p_write_file(fh: *mut c_void, buff: *const c_void, len: u32, written_bytes: *mut u32, wol: *mut OVERLAPPED) -> i32 {
+    trace!(target: "our_p_write_file", "Entered");
+
+    match with_state_var(|s| {
+        if let Some(write_file) = s.orig_writefile {
+            return Ok(write_file);
+        } else {
+            return Err(Error::WasEmpty("PWriteFile"))
+        }
+    }) {
+        Ok(wf) => {
+            trace!(target: "our_p_write_file", "Running original PWriteFile at {:?}.", wf);
+            return wf(fh, buff, len, written_bytes, wol);
+        }
+        Err(e) => {
+            error!(target: "our_p_write_file", "Could not call original PWriteFile: {}", e);
+            return 0;
+        }
+    }
+}
+
+#[allow(unused)]
+unsafe extern "C" fn our_p_read_file(fh: *mut c_void, buff: *mut c_void, len: u32, read_bytes: *mut u32, wol: *mut OVERLAPPED) -> i32 {
+    trace!(target: "our_p_read_file", "Entered");
+
+    match with_state_var(|s| {
+        if let Some(read_file) = s.orig_readfile {
+            return Ok(read_file);
+        } else {
+            return Err(Error::WasEmpty("PReadFile"))
+        }
+    }) {
+        Ok(rf) => {
+            trace!(target: "our_p_read_file", "Running original PReadFile at {:?}.", rf);
+            return rf(fh, buff, len, read_bytes, wol)
+        }
+        Err(e) => {
+            error!(target: "our_p_read_file", "Could not call original PWriteFile: {}", e);
+            return 0;
+        }
+    }
 }
 
 unsafe extern "C" fn ttx_modify_menu(menu: HMENU) {
@@ -111,7 +191,7 @@ unsafe extern "C" fn ttx_modify_menu(menu: HMENU) {
 
         Ok(())
     }) {
-        eprintln!("Could not modify menu: {}", e);
+        debug!(target: "TTXModifyMenu", "Could not modify menu: {}", e);
     }
 }
 
@@ -162,10 +242,12 @@ unsafe extern "system" fn litex_setup_dialog(
         }
         WM_COMMAND => match param_1.0 as i32 {
             p if p == IDOK.0 => {
+                trace!(target: "setup_dialog", "OK");
+
                 let kernel_path = match get_dlg_osstring(dialog, IDC_LITEX_KERNEL as i32) {
                     Ok(kpath) => Some(PathBuf::from(kpath)),
                     Err(e) => {
-                        eprintln!("Could not get kernel path buffer {:?}", e);
+                        error!(target: "setup_dialog", "Could not get kernel path buffer {:?}", e);
                         None
                     }
                 };
@@ -187,24 +269,24 @@ unsafe extern "system" fn litex_setup_dialog(
                         }
                     }
                     Err(e) => {
-                        eprintln!("Could not get boot address: {:?}", e);
+                        error!(target: "setup_dialog", "Could not get boot address: {:?}", e);
                         None
                     }
                 };
 
-                eprintln!("Got kernel path: {:?}", kernel_path);
-                eprintln!("Got boot address: {:?}", boot_addr);
+                debug!(target: "setup_dialog", "Got kernel path: {:?}", kernel_path);
+                debug!(target: "setup_dialog", "Got boot address: {:?}", boot_addr);
 
                 if kernel_path.is_some() && boot_addr.is_some() {
                     if let Err(e) = with_state_var(|s| {
-                        eprintln!("Plugin now actively searching for magic string.");
+                        info!(target: "setup_dialog", "Plugin now actively searching for magic string.");
                         s.activity = Activity::Active {
                             file: kernel_path.unwrap(),
                             boot_addr: boot_addr.unwrap()
                         };
                         Ok(())
                     }) {
-                        eprintln!("Could not move plugin to active state: {}", e);
+                        error!(target: "setup_dialog", "Could not move plugin to active state: {}", e);
                     }
                 }
 
@@ -212,19 +294,20 @@ unsafe extern "system" fn litex_setup_dialog(
                 return true.into();
             }
             p if p == IDCANCEL.0 => {
+                trace!(target: "setup_dialog", "Cancel");
                 let _ = EndDialog(dialog, IDCANCEL.0 as isize);
                 return true.into();
             }
             p if p == IDC_LITEX_CHOOSE_KERNEL_BUTTON as i32 => {
+                trace!(target: "setup_dialog", "Choose Kernel");
                 if let Some(path) = FileDialog::new().add_filter("kernel", &["bin"]).pick_file() {
                     let widepath = U16CString::from_os_str_truncate(path.as_os_str());
                     if let Err(e) =
                         SetDlgItemTextW(dialog, IDC_LITEX_KERNEL as i32, PCWSTR(widepath.as_ptr()))
                     {
-                        eprintln!("Could not set kernel file path: {}", e);
+                        error!(target: "setup_dialog", "Could not set kernel file path: {}", e);
                     }
                 }
-                eprintln!("Choose Kernel Button");
             }
             _ => {}
         },
@@ -234,7 +317,7 @@ unsafe extern "system" fn litex_setup_dialog(
     return false.into();
 }
 
-fn with_state_var<F>(f: F) -> Result<(), Error> where F: FnOnce(&mut State) -> Result<(), Error> {
+fn with_state_var<T, F>(f: F) -> Result<T, Error> where F: FnOnce(&mut State) -> Result<T, Error> {
     let mut state_guard = TTX_LITEX_STATE
         .try_lock()
         .map_err(|_| Error::CouldntUnlock("TTXState"))?;
@@ -256,6 +339,8 @@ fn get_hinst_var() -> Result<HINSTANCE, Error> {
 unsafe extern "C" fn ttx_process_command(window: HWND, cmd: u16) -> i32 {
     match cmd as usize {
         ID_MENU_LITEX => {
+            debug!(target: "TTXProcessCommand", "LiteX option clicked.");
+
             if let Err(e) = get_hinst_var().and_then(|hinst| {
                 let res = DialogBoxParamW(
                     Some(hinst),
@@ -271,10 +356,9 @@ unsafe extern "C" fn ttx_process_command(window: HWND, cmd: u16) -> i32 {
                     Ok(())
                 }
             }) {
-                eprintln!("Could not open LiteX dialog: {}", e)
+                debug!(target: "TTXProcessCommand", "Could not open LiteX dialog: {}", e)
             }
 
-            eprintln!("LiteX option clicked.");
             return 1;
         }
         _ => {
@@ -297,8 +381,8 @@ const TTX_EXPORTS: tt::TTXExports = tt::TTXExports {
     TTXProcessCommand: Some(ttx_process_command),
     TTXEnd: None,
     TTXSetCommandLine: None,
-    TTXOpenFile: None,
-    TTXCloseFile: None,
+    TTXOpenFile: Some(ttx_open_file),
+    TTXCloseFile: Some(ttx_close_file),
 };
 
 #[no_mangle]
