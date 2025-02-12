@@ -1,5 +1,7 @@
+mod sfl;
 mod teraterm;
 
+use core::slice;
 use std::ffi::{c_void, OsString};
 use std::fmt;
 use std::os::windows::ffi::OsStringExt;
@@ -9,6 +11,7 @@ use std::sync::Mutex;
 use log::*;
 use once_cell::sync::OnceCell;
 use rfd::FileDialog;
+use sfl::MagicMatcher;
 use stderrlog;
 use teraterm as tt;
 
@@ -39,7 +42,7 @@ struct State {
 
 enum Activity {
     Inactive,
-    Active { file: PathBuf, boot_addr: u32 },
+    Active { file: PathBuf, boot_addr: u32, matcher: MagicMatcher },
 }
 
 enum Error {
@@ -169,6 +172,17 @@ unsafe extern "C" fn our_p_read_file(
     trace!(target: "our_p_read_file", "Entered");
 
     match with_state_var(|s| {
+        match &mut s.activity {
+            Activity::Active { file, boot_addr , matcher} => {
+                let chunk = slice::from_raw_parts(buff as *const u8, len as usize);
+                if matcher.look_for_match(chunk) {
+                    info!(target: "our_p_read_file", "Found magic string.");
+
+                }
+            },
+            _ => {}
+        }
+
         if let Some(read_file) = s.orig_readfile {
             return Ok(read_file);
         } else {
@@ -295,6 +309,7 @@ unsafe extern "system" fn litex_setup_dialog(
                         s.activity = Activity::Active {
                             file: kernel_path.unwrap(),
                             boot_addr: boot_addr.unwrap(),
+                            matcher: MagicMatcher::new(sfl::MAGIC)
                         };
                         Ok(())
                     }) {
