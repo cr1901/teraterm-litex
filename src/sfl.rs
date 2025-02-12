@@ -1,4 +1,9 @@
-use std::{fs::File, io::{self, Read, Seek, SeekFrom}, mem::offset_of, path::Path};
+use std::{
+    fs::File,
+    io::{self, Read, Seek, SeekFrom},
+    mem::offset_of,
+    path::Path,
+};
 
 use crc;
 use zerocopy::{byteorder::big_endian::U16, Immutable, IntoBytes};
@@ -17,7 +22,7 @@ pub struct MagicMatcher {
 pub enum Cmd {
     Abort = 0,
     Load = 1,
-    Jump = 2
+    Jump = 2,
 }
 
 #[repr(u8)]
@@ -25,7 +30,7 @@ pub enum Resp {
     Success = b'K',
     CrcError = b'C',
     Unknown = b'U',
-    AckError = b'E'
+    AckError = b'E',
 }
 
 pub struct TryFromU8Error(());
@@ -35,11 +40,11 @@ impl TryFrom<u8> for Resp {
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
-            b'K' => { Ok(Resp::Success) },
-            b'C' => { Ok(Resp::CrcError) },
-            b'U' => { Ok(Resp::Unknown) },
-            b'E' => { Ok(Resp::AckError) },
-            _ => { Err(TryFromU8Error(())) }
+            b'K' => Ok(Resp::Success),
+            b'C' => Ok(Resp::CrcError),
+            b'U' => Ok(Resp::Unknown),
+            b'E' => Ok(Resp::AckError),
+            _ => Err(TryFromU8Error(())),
         }
     }
 }
@@ -48,11 +53,14 @@ pub struct SflLoader<R> {
     reader: R,
     base: u32,
     offs: usize,
-    chunk_size: u16
+    chunk_size: u16,
 }
 
 impl SflLoader<File> {
-    pub fn open<P>(path: P, base: u32) -> Result<SflLoader<File>, io::Error> where P: AsRef<Path> {
+    pub fn open<P>(path: P, base: u32) -> Result<SflLoader<File>, io::Error>
+    where
+        P: AsRef<Path>,
+    {
         Ok(SflLoader::new(File::open(path)?, base))
     }
 }
@@ -63,27 +71,30 @@ impl<R> SflLoader<R> {
             reader,
             base,
             offs: 0,
-            chunk_size: 256
+            chunk_size: 256,
         }
     }
-    
-    pub fn encode_data_frame(&mut self, frame_num: u32) -> Result<Box<Frame>, io::Error> where R: Read + Seek {
-        let mut frame = Box::new(
-            Frame {
-                len: 0,
-                crc: 0.into(),
-                cmd: Cmd::Load,
-                payload: [0; 255]
-            }
-        );
 
-        let addr = self.base + frame_num*(self.chunk_size as u32);
+    pub fn encode_data_frame(&mut self, frame_num: u32) -> Result<Box<Frame>, io::Error>
+    where
+        R: Read + Seek,
+    {
+        let mut frame = Box::new(Frame {
+            len: 0,
+            crc: 0.into(),
+            cmd: Cmd::Load,
+            payload: [0; 255],
+        });
+
+        let addr = self.base + frame_num * (self.chunk_size as u32);
 
         let addr_be = addr.to_be_bytes();
         frame.payload[0..4].copy_from_slice(&addr_be);
         frame.len = 4;
 
-        self.reader.seek(SeekFrom::Start((frame_num*(self.chunk_size as u32)).into()))?;
+        self.reader.seek(SeekFrom::Start(
+            (frame_num * (self.chunk_size as u32)).into(),
+        ))?;
         let read_len = self.reader.read(&mut frame.payload[4..])?;
         frame.len += read_len as u8;
 
@@ -94,14 +105,12 @@ impl<R> SflLoader<R> {
     }
 
     pub fn encode_boot_frame(&mut self, address: u32) -> Box<Frame> {
-        let mut frame = Box::new(
-            Frame {
-                len: 0,
-                crc: 0.into(),
-                cmd: Cmd::Jump,
-                payload: [0; 255]
-            }
-        );
+        let mut frame = Box::new(Frame {
+            len: 0,
+            crc: 0.into(),
+            cmd: Cmd::Jump,
+            payload: [0; 255],
+        });
 
         let addr_be = address.to_be_bytes();
         frame.payload[0..4].copy_from_slice(&addr_be);
@@ -114,21 +123,14 @@ impl<R> SflLoader<R> {
     }
 }
 
-
-
-
-
-
 #[derive(IntoBytes, Immutable)]
 #[repr(packed)]
 pub struct Frame {
     len: u8,
     crc: U16,
     cmd: Cmd,
-    payload: [u8; 255]
+    payload: [u8; 255],
 }
-
-
 
 impl MagicMatcher {
     pub fn new(magic: &'static [u8]) -> Self {
@@ -154,7 +156,7 @@ impl MagicMatcher {
                 self.state = 0;
             }
         }
-        
+
         return found;
     }
 
