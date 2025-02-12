@@ -1,4 +1,4 @@
-use std::io::{self, Read};
+use std::{fs::File, io::{self, Read, Seek, SeekFrom}, mem::offset_of, path::Path};
 
 use crc;
 use zerocopy::{byteorder::big_endian::U16, Immutable, IntoBytes};
@@ -44,6 +44,81 @@ impl TryFrom<u8> for Resp {
     }
 }
 
+pub struct SflLoader<R> {
+    reader: R,
+    base: u32,
+    offs: usize,
+    chunk_size: u16
+}
+
+impl SflLoader<File> {
+    pub fn open<P>(path: P, base: u32) -> Result<SflLoader<File>, io::Error> where P: AsRef<Path> {
+        Ok(SflLoader::new(File::open(path)?, base))
+    }
+}
+
+impl<R> SflLoader<R> {
+    pub fn new(reader: R, base: u32) -> Self {
+        Self {
+            reader,
+            base,
+            offs: 0,
+            chunk_size: 256
+        }
+    }
+    
+    pub fn encode_data_frame(&mut self, frame_num: u32) -> Result<Box<Frame>, io::Error> where R: Read + Seek {
+        let mut frame = Box::new(
+            Frame {
+                len: 0,
+                crc: 0.into(),
+                cmd: Cmd::Load,
+                payload: [0; 255]
+            }
+        );
+
+        let addr = self.base + frame_num*(self.chunk_size as u32);
+
+        let addr_be = addr.to_be_bytes();
+        frame.payload[0..4].copy_from_slice(&addr_be);
+        frame.len = 4;
+
+        self.reader.seek(SeekFrom::Start((frame_num*(self.chunk_size as u32)).into()))?;
+        let read_len = self.reader.read(&mut frame.payload[4..])?;
+        frame.len += read_len as u8;
+
+        let crc = CCITT.checksum(&frame.as_bytes()[offset_of!(Frame, cmd)..]);
+        frame.crc = crc.into();
+
+        Ok(frame)
+    }
+
+    pub fn encode_boot_frame(&mut self, address: u32) -> Box<Frame> {
+        let mut frame = Box::new(
+            Frame {
+                len: 0,
+                crc: 0.into(),
+                cmd: Cmd::Jump,
+                payload: [0; 255]
+            }
+        );
+
+        let addr_be = address.to_be_bytes();
+        frame.payload[0..4].copy_from_slice(&addr_be);
+        frame.len = 4;
+
+        let crc = CCITT.checksum(&frame.as_bytes()[offset_of!(Frame, cmd)..]);
+        frame.crc = crc.into();
+
+        frame
+    }
+}
+
+
+
+
+
+
 #[derive(IntoBytes, Immutable)]
 #[repr(packed)]
 pub struct Frame {
@@ -53,28 +128,6 @@ pub struct Frame {
     payload: [u8; 255]
 }
 
-pub fn encode_data_frame<R>(address: u32, reader: &mut R) -> Result<Box<Frame>, io::Error> where R: Read {
-    let mut frame = Box::new(
-        Frame {
-            len: 0,
-            crc: 0.into(),
-            cmd: Cmd::Load,
-            payload: [0; 255]
-        }
-    );
-
-    let addr_be = address.to_be_bytes();
-    frame.payload[0..4].copy_from_slice(&addr_be);
-    frame.len = 4;
-
-    let read_len = reader.read(&mut frame.payload[4..])?;
-    frame.len += read_len as u8;
-
-    let crc = CCITT.checksum(&frame.as_bytes()[3..]);
-    frame.crc = crc.into();
-
-    Ok(frame)
-}
 
 
 impl MagicMatcher {
@@ -103,5 +156,9 @@ impl MagicMatcher {
         }
         
         return found;
+    }
+
+    pub fn reset(&mut self) {
+        self.state = 0;
     }
 }

@@ -4,14 +4,15 @@ mod teraterm;
 use core::slice;
 use std::ffi::{c_void, OsString};
 use std::fmt;
+use std::fs::File;
 use std::os::windows::ffi::OsStringExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use log::*;
 use once_cell::sync::OnceCell;
 use rfd::FileDialog;
-use sfl::MagicMatcher;
+use sfl::{MagicMatcher, SflLoader};
 use stderrlog;
 use teraterm as tt;
 
@@ -38,11 +39,13 @@ struct State {
     file_menu: Option<HMENU>,
     transfer_menu: Option<HMENU>,
     activity: Activity,
+    matcher: MagicMatcher,
+    sfl_loader: Option<SflLoader<File>>
 }
 
 enum Activity {
     Inactive,
-    Active { file: PathBuf, boot_addr: u32, matcher: MagicMatcher },
+    Active,
 }
 
 enum Error {
@@ -91,6 +94,8 @@ unsafe extern "C" fn ttx_init(ts: tt::PTTSet, cv: tt::PComVar) {
                 file_menu: None,
                 transfer_menu: None,
                 activity: Activity::Inactive,
+                matcher: MagicMatcher::new(sfl::MAGIC),
+                sfl_loader: None
             })
         }
         Err(_) => {
@@ -173,11 +178,11 @@ unsafe extern "C" fn our_p_read_file(
 
     match with_state_var(|s| {
         match &mut s.activity {
-            Activity::Active { file, boot_addr , matcher} => {
+            Activity::Active => {
                 let chunk = slice::from_raw_parts(buff as *const u8, len as usize);
-                if matcher.look_for_match(chunk) {
+                if s.matcher.look_for_match(chunk) {
+                    s.matcher.reset();
                     info!(target: "our_p_read_file", "Found magic string.");
-
                 }
             },
             _ => {}
@@ -305,12 +310,19 @@ unsafe extern "system" fn litex_setup_dialog(
 
                 if kernel_path.is_some() && boot_addr.is_some() {
                     if let Err(e) = with_state_var(|s| {
-                        info!(target: "setup_dialog", "Plugin now actively searching for magic string.");
-                        s.activity = Activity::Active {
-                            file: kernel_path.unwrap(),
-                            boot_addr: boot_addr.unwrap(),
-                            matcher: MagicMatcher::new(sfl::MAGIC)
-                        };
+
+                        match SflLoader::open(kernel_path.unwrap(), boot_addr.unwrap()) {
+                            Ok(loader) => {
+                                s.sfl_loader = Some(loader);
+                                s.activity = Activity::Active;
+                                info!(target: "setup_dialog", "Plugin now actively searching for magic string.");
+                            },
+                            Err(e) => {
+                                error!(target: "setup_dialog", "Could not open file: {}", e);
+                            }
+
+                        }
+                        
                         Ok(())
                     }) {
                         error!(target: "setup_dialog", "Could not move plugin to active state: {}", e);
@@ -327,7 +339,7 @@ unsafe extern "system" fn litex_setup_dialog(
             }
             p if p == IDC_LITEX_CHOOSE_KERNEL_BUTTON as i32 => {
                 trace!(target: "setup_dialog", "Choose Kernel");
-                if let Some(path) = FileDialog::new().add_filter("kernel", &["bin"]).pick_file() {
+                if let Some(path) = FileDialog::new().pick_file() {
                     let widepath = U16CString::from_os_str_truncate(path.as_os_str());
                     if let Err(e) =
                         SetDlgItemTextW(dialog, IDC_LITEX_KERNEL as i32, PCWSTR(widepath.as_ptr()))
