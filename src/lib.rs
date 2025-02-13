@@ -4,11 +4,11 @@ mod teraterm;
 use core::slice;
 use std::ffi::{c_void, OsString};
 use std::fmt::Write;
-use std::{fmt, io, ptr};
 use std::fs::File;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::{fmt, io, ptr};
 
 use log::*;
 use once_cell::sync::OnceCell;
@@ -61,12 +61,9 @@ enum Error {
     WasEmpty(&'static str),
     WinError(windows::core::Error),
     OutBuffOutOfBounds(u32),
-    OutBuffFull {
-        need: u32,
-        actual: u32
-    },
+    OutBuffFull { need: u32, actual: u32 },
     FileIoError(io::Error),
-    BadAddressError(String)
+    BadAddressError(String),
 }
 
 impl fmt::Display for Error {
@@ -80,18 +77,30 @@ impl fmt::Display for Error {
             }
             Error::WinError(e) => {
                 write!(f, "Windows error: {}", e)
-            },
+            }
             Error::OutBuffOutOfBounds(s) => {
-                write!(f, "A write to TeraTerm's OutBuff would go out of bounds ({})", s)
-            },
+                write!(
+                    f,
+                    "A write to TeraTerm's OutBuff would go out of bounds ({})",
+                    s
+                )
+            }
             Error::OutBuffFull { need, actual } => {
-                write!(f, "A write to TeraTerm's OutBuff would not fit (need {}, actual {})", need, actual)
-            },
+                write!(
+                    f,
+                    "A write to TeraTerm's OutBuff would not fit (need {}, actual {})",
+                    need, actual
+                )
+            }
             Error::FileIoError(e) => {
                 write!(f, "Could not open or read kernel file: {}", e)
             }
             Error::BadAddressError(a) => {
-                write!(f, "Could not intepret address as a decimal or hex integer: {}", a)
+                write!(
+                    f,
+                    "Could not intepret address as a decimal or hex integer: {}",
+                    a
+                )
             }
         }
     }
@@ -126,7 +135,7 @@ unsafe extern "C" fn ttx_init(ts: tt::PTTSet, cv: tt::PComVar) {
                 frames_acked: None,
                 frames_sent: None,
                 filename: None,
-                addr: 0x40000000
+                addr: 0x40000000,
             })
         }
         Err(_) => {
@@ -216,8 +225,8 @@ unsafe extern "C" fn our_p_read_file(
                     info!(target: "our_p_read_file", "Found magic string.");
 
                     match inject_output(s, &MAGIC_RESPONSE) {
-                        Ok(()) => {},
-                        Err(e) => error!("Could not inject magic response: {}", e)
+                        Ok(()) => {}
+                        Err(e) => error!("Could not inject magic response: {}", e),
                     }
                 }
             }
@@ -250,12 +259,15 @@ fn inject_output(s: &mut State, buf: &[u8]) -> Result<(), Error> {
     let ptr = unsafe { (*s.cv).OutPtr } as u32;
 
     if (ptr + len) >= tt::OutBuffSize {
-        return Err(Error::OutBuffOutOfBounds(ptr + len))
+        return Err(Error::OutBuffOutOfBounds(ptr + len));
     }
 
     let max_out_size = tt::OutBuffSize - len;
     if buf.len() > max_out_size as usize {
-        return Err(Error::OutBuffFull { need: buf.len() as u32, actual: max_out_size })
+        return Err(Error::OutBuffFull {
+            need: buf.len() as u32,
+            actual: max_out_size,
+        });
     }
 
     let src = unsafe { &raw const (*out_buff)[ptr as usize] };
@@ -279,7 +291,7 @@ fn inject_output(s: &mut State, buf: &[u8]) -> Result<(), Error> {
     unsafe { ptr::copy(our_buf_ptr, our_dst, buf.len()) };
 
     // OutBuff is NOT circular; ptr is "next value to be written", and
-    // cnt is "num of values left to write". Once cnt becomes 0, ptr also 
+    // cnt is "num of values left to write". Once cnt becomes 0, ptr also
     // gets reset to 0. (See "CommSend", which is the immediate parent
     // function of PWriteFile).
     unsafe {
@@ -338,7 +350,7 @@ fn get_dlg_osstring(dialog: HWND, control: i32) -> Result<OsString, windows::cor
     }
 }
 
-fn set_dlg_osstring(dialog: HWND, control: i32, ) -> Result<OsString, windows::core::Error> {
+fn set_dlg_osstring(dialog: HWND, control: i32) -> Result<OsString, windows::core::Error> {
     let code_unit_len = get_buf_len(dialog, control)?;
     let mut code_str: Vec<u16> = vec![0; code_unit_len + 1];
     let used_len = unsafe { GetDlgItemTextW(dialog, control, &mut code_str) } as usize;
@@ -368,17 +380,14 @@ unsafe extern "system" fn litex_setup_dialog(
             // Restore existing values.
             let (maybe_file, addr, active) = with_state_var(|s| {
                 Ok((s.filename.clone(), s.addr, s.activity != Activity::Inactive))
-            }).unwrap_or((None, 0x40000000, false));
+            })
+            .unwrap_or((None, 0x40000000, false));
 
             if let Some(file) = maybe_file {
                 let mut file_vec: Vec<u16> = file.as_os_str().encode_wide().collect();
                 file_vec.push(0);
 
-                let _ = SetDlgItemTextW(
-                    dialog,
-                    IDC_LITEX_KERNEL as i32,
-                    PCWSTR(file_vec.as_ptr()),
-                );
+                let _ = SetDlgItemTextW(dialog, IDC_LITEX_KERNEL as i32, PCWSTR(file_vec.as_ptr()));
             }
 
             let mut addr_str = String::new();
@@ -393,29 +402,46 @@ unsafe extern "system" fn litex_setup_dialog(
                 PCWSTR(addr_vec.as_ptr()),
             );
 
-            let _ = SendDlgItemMessageW(dialog, IDC_LITEX_ACTIVE as i32, BM_SETCHECK, WPARAM(active.into()), LPARAM(0));
+            let _ = SendDlgItemMessageW(
+                dialog,
+                IDC_LITEX_ACTIVE as i32,
+                BM_SETCHECK,
+                WPARAM(active.into()),
+                LPARAM(0),
+            );
             return true.into();
         }
         WM_COMMAND => match param_1.0 as i32 {
             p if p == IDOK.0 => {
                 trace!(target: "setup_dialog", "OK");
 
-                let active = SendDlgItemMessageW(dialog, IDC_LITEX_ACTIVE as i32, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 != 0;
+                let active = SendDlgItemMessageW(
+                    dialog,
+                    IDC_LITEX_ACTIVE as i32,
+                    BM_GETCHECK,
+                    WPARAM(0),
+                    LPARAM(0),
+                )
+                .0 != 0;
 
-                let kernel_path = get_dlg_osstring(dialog, IDC_LITEX_KERNEL as i32).map(|kpath| PathBuf::from(kpath));
+                let kernel_path = get_dlg_osstring(dialog, IDC_LITEX_KERNEL as i32)
+                    .map(|kpath| PathBuf::from(kpath));
 
-                let boot_addr = get_dlg_osstring(dialog, IDC_LITEX_BOOT_ADDR as i32).map_err(Error::WinError)
+                let boot_addr = get_dlg_osstring(dialog, IDC_LITEX_BOOT_ADDR as i32)
+                    .map_err(Error::WinError)
                     .and_then(|os| {
                         let boot_str = os.to_string_lossy().into_owned();
 
                         if boot_str.starts_with("0X") || boot_str.starts_with("0x") {
                             let no_prefix = &boot_str[2..];
-                            u32::from_str_radix(no_prefix, 16).map_err(|_| Error::BadAddressError(boot_str))
+                            u32::from_str_radix(no_prefix, 16)
+                                .map_err(|_| Error::BadAddressError(boot_str))
                         } else {
                             if let Ok(addr) = u32::from_str_radix(&boot_str, 10) {
                                 Ok(addr)
                             } else {
-                                u32::from_str_radix(&boot_str, 16).map_err(|_| Error::BadAddressError(boot_str))
+                                u32::from_str_radix(&boot_str, 16)
+                                    .map_err(|_| Error::BadAddressError(boot_str))
                             }
                         }
                     });
@@ -426,29 +452,25 @@ unsafe extern "system" fn litex_setup_dialog(
 
                 // FIXME: Error paths still need some tuning...
                 match (kernel_path, boot_addr, active) {
-                    (Ok(path), Ok(addr), true) => {
-                        match SflLoader::open(path.clone(), addr) {
-                            Ok(loader) => {
-                                let _ = with_state_var(|s| {
-                                    s.filename = Some(path);
-                                    s.addr = addr;
-                                    s.sfl_loader = Some(loader);
-                                    s.matcher.reset();
-                                    s.activity = Activity::LookForMagic;
-                                    Ok(())
-                                });
+                    (Ok(path), Ok(addr), true) => match SflLoader::open(path.clone(), addr) {
+                        Ok(loader) => {
+                            let _ = with_state_var(|s| {
+                                s.filename = Some(path);
+                                s.addr = addr;
+                                s.sfl_loader = Some(loader);
+                                s.matcher.reset();
+                                s.activity = Activity::LookForMagic;
+                                Ok(())
+                            });
 
-                                info!(target: "setup_dialog", "Plugin now actively searching for magic string.");
-                            },
-                            Err(e) => {
-                                error!(target: "setup_dialog", "Could not open file: {}", e);
-                            }
+                            info!(target: "setup_dialog", "Plugin now actively searching for magic string.");
                         }
-
+                        Err(e) => {
+                            error!(target: "setup_dialog", "Could not open file: {}", e);
+                        }
                     },
                     (kernel_path, addr, _) => {
                         if let Err(e) = kernel_path.as_ref() {
-
                             error!(target: "setup_dialog", "Bad filename: {}", e);
 
                             /* let mut err_str = String::new();
