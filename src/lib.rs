@@ -2,6 +2,7 @@ mod sfl;
 mod teraterm;
 
 use core::slice;
+use std::env;
 use std::ffi::{c_void, OsString};
 use std::fmt::Write;
 use std::fs::File;
@@ -23,6 +24,7 @@ use windows::Win32::Foundation::*;
 use windows::Win32::System::SystemServices::*;
 use windows::Win32::System::IO::OVERLAPPED;
 use windows::Win32::UI::WindowsAndMessaging::*;
+use zerocopy::IntoBytes;
 
 pub const ID_MENU_LITEX: usize = 56000;
 pub const IDD_SETUP_LITEX: usize = 1001;
@@ -43,8 +45,8 @@ struct State {
     activity: Activity,
     matcher: MagicMatcher,
     sfl_loader: Option<SflLoader<File>>,
-    frames_sent: Option<u32>,
-    frames_acked: Option<u32>,
+    last_frame_sent: Option<u32>,
+    last_frame_acked: Option<u32>,
     filename: Option<PathBuf>,
     addr: u32,
 }
@@ -53,6 +55,7 @@ struct State {
 enum Activity {
     Inactive,
     LookForMagic,
+    WriteAndWait,
 }
 
 #[derive(Debug)]
@@ -120,6 +123,30 @@ unsafe extern "C" fn ttx_init(ts: tt::PTTSet, cv: tt::PComVar) {
         let _ = stderrlog::new().quiet(true).init();
     }
 
+    let mut filename: Option<PathBuf> = None;
+    let mut activity: Activity = Activity::Inactive;
+    let addr = 0x40000000;
+    let mut sfl_loader: Option<SflLoader<File>> = None;
+
+    if cfg!(debug_assertions) {
+        if let Ok(f) = env::var("TTX_LITEX_KERNEL") {
+            debug!(target: "TTXInit", "Found TTX_LITEX_KERNEL override: {} {:?}", f, env::current_dir());
+
+            let path = PathBuf::from(OsString::from(f));
+            match SflLoader::open(path.clone(), addr) {
+                Ok(ldr) => {
+                    debug!(target: "TTXInit", "Forcing TTXLiteX directly into LookForMagic state");
+                    filename = Some(path);
+                    activity = Activity::LookForMagic;
+                    sfl_loader = Some(ldr);
+                }
+                Err(e) => {
+                    error!(target: "TTXInit", "Could not force TTXLiteX into LookForMagic state: {}", e);
+                }
+            }
+        }
+    }
+
     match TTX_LITEX_STATE.try_lock() {
         Ok(mut s) => {
             *s = Some(State {
@@ -129,14 +156,14 @@ unsafe extern "C" fn ttx_init(ts: tt::PTTSet, cv: tt::PComVar) {
                 orig_writefile: None,
                 file_menu: None,
                 transfer_menu: None,
-                activity: Activity::Inactive,
+                activity,
                 matcher: MagicMatcher::new(sfl::MAGIC),
-                sfl_loader: None,
-                frames_acked: None,
-                frames_sent: None,
-                filename: None,
-                addr: 0x40000000,
-            })
+                sfl_loader,
+                last_frame_acked: None,
+                last_frame_sent: None,
+                filename,
+                addr,
+            });
         }
         Err(_) => {
             error!(target: "TTXInit", "Could not set state. Plugin cannot do anything.");
@@ -189,6 +216,39 @@ unsafe extern "C" fn our_p_write_file(
     trace!(target: "our_p_write_file", "Entered");
 
     match with_state_var(|s| {
+        match (&mut s.activity, s.last_frame_sent, s.last_frame_acked, s.sfl_loader.as_mut()) {
+            (Activity::WriteAndWait, None, None, Some(loader)) => {
+                let buf = slice::from_raw_parts(buff as *const u8, len as usize);
+
+                if let Err(e) = loader
+                    .encode_data_frame(0)
+                    .map_err(|e| Error::FileIoError(e))
+                    .and_then(|frame| {
+                        trace!(target: "our_p_write_file", "Injecting packet: {:?}", frame.as_bytes());
+                        inject_output(s, &frame.as_bytes())?;
+                        s.last_frame_sent = Some(0);
+
+                        Ok(())
+                    }) {
+                        error!("Could not send packet 0: {}", e);
+                    }
+            },
+            (Activity::WriteAndWait, Some(sent), Some(acked), Some(loader)) if sent == acked => {
+                if let Err(e) = loader
+                    .encode_data_frame(sent)
+                    .map_err(|e| Error::FileIoError(e))
+                    .and_then(|frame| {
+                        inject_output(s, &frame.as_bytes())?;
+                        s.last_frame_sent = Some(sent + 1);
+
+                        Ok(())
+                    }) {
+                        error!("Could not send packet {}: {}", sent, e);
+                    }
+            },
+            _ => {}
+        }   
+
         if let Some(write_file) = s.orig_writefile {
             return Ok(write_file);
         } else {
@@ -225,11 +285,14 @@ unsafe extern "C" fn our_p_read_file(
                     info!(target: "our_p_read_file", "Found magic string.");
 
                     match inject_output(s, &MAGIC_RESPONSE) {
-                        Ok(()) => {}
+                        Ok(()) => {
+                            s.activity = Activity::WriteAndWait;
+                        }
                         Err(e) => error!("Could not inject magic response: {}", e),
                     }
                 }
             }
+            Activity::WriteAndWait => {}
             _ => {}
         }
 
@@ -460,6 +523,8 @@ unsafe extern "system" fn litex_setup_dialog(
                                 s.sfl_loader = Some(loader);
                                 s.matcher.reset();
                                 s.activity = Activity::LookForMagic;
+                                s.last_frame_acked = None;
+                                s.last_frame_sent = None;
                                 Ok(())
                             });
 
