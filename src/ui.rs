@@ -8,10 +8,10 @@ use std::path::PathBuf;
 use log::*;
 use rfd::FileDialog;
 
-use super::Error;
-use super::state::{Activity, with_state_var, get_hinst_var};
 use super::sfl::SflLoader;
+use super::state::{get_hinst_var, with_state_var, Activity};
 use super::tt;
+use super::Error;
 
 use widestring::{u16cstr, U16CString};
 use windows::core::PCWSTR;

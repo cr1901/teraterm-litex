@@ -14,9 +14,9 @@ use log::*;
 use once_cell::sync::OnceCell;
 use stderrlog;
 
-use super::Error;
 use super::sfl::{self, MagicMatcher, SflLoader};
 use super::tt;
+use super::Error;
 
 use windows::Win32::Foundation::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -90,7 +90,9 @@ pub fn init_state_var(ts: tt::PTTSet, cv: tt::PComVar) -> Result<(), Error> {
         }
     }
 
-    let mut s = TTX_LITEX_STATE.try_lock().map_err(|_| Error::CouldntUnlock("init_state_var"))?;
+    let mut s = TTX_LITEX_STATE
+        .try_lock()
+        .map_err(|_| Error::CouldntUnlock("init_state_var"))?;
 
     *s = Some(State {
         ts,
@@ -111,7 +113,6 @@ pub fn init_state_var(ts: tt::PTTSet, cv: tt::PComVar) -> Result<(), Error> {
     Ok(())
 }
 
-
 pub fn with_state_var<T, F>(f: F) -> Result<T, Error>
 where
     F: FnOnce(&mut State) -> Result<T, Error>,
@@ -126,7 +127,9 @@ where
 }
 
 pub fn init_hinst_var(dll_module: HINSTANCE) -> Result<(), Error> {
-    let hinst = OUR_HINST.try_lock().map_err(|_| Error::CouldntUnlock("init_hinst_var"))?;
+    let hinst = OUR_HINST
+        .try_lock()
+        .map_err(|_| Error::CouldntUnlock("init_hinst_var"))?;
     let _ = hinst.set(OurHInstance(dll_module));
 
     Ok(())

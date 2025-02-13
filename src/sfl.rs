@@ -95,10 +95,13 @@ impl<R> SflLoader<R> {
         self.reader.seek(SeekFrom::Start(
             (frame_num * (self.chunk_size as u32)).into(),
         ))?;
-        let read_len = self.reader.read(&mut frame.payload[4..(self.chunk_size as usize)])?;
+        let read_len = self
+            .reader
+            .read(&mut frame.payload[4..(self.chunk_size as usize)])?;
         frame.len += read_len as u8;
 
-        let crc = CCITT.checksum(&frame.as_bytes()[offset_of!(Frame, cmd)..((self.chunk_size + 4) as usize)]);
+        let crc = CCITT
+            .checksum(&frame.as_bytes()[offset_of!(Frame, cmd)..((self.chunk_size + 4) as usize)]);
         frame.crc = crc.into();
 
         Ok(((self.chunk_size + 4) as usize, frame))

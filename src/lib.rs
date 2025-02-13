@@ -7,10 +7,10 @@ mod state;
 mod teraterm;
 mod ui;
 
+use error::Error;
 use log::*;
 use state::{init_hinst_var, init_state_var};
 use teraterm as tt;
-use error::Error;
 
 use windows::Win32::Foundation::*;
 use windows::Win32::System::SystemServices::*;

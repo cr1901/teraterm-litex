@@ -4,11 +4,11 @@ use core::slice;
 use std::ffi::c_void;
 use std::ptr;
 
-use log::*;
 use super::sfl::MAGIC_RESPONSE;
 use super::state::{with_state_var, Activity, State};
 use super::tt;
 use super::Error;
+use log::*;
 
 use windows::Win32::System::IO::OVERLAPPED;
 use zerocopy::IntoBytes;
@@ -24,7 +24,12 @@ unsafe extern "C" fn our_p_write_file(
     trace!(target: "our_p_write_file", "Entered");
 
     match with_state_var(|s| {
-        match (&mut s.activity, s.last_frame_sent, s.last_frame_acked, s.sfl_loader.as_mut()) {
+        match (
+            &mut s.activity,
+            s.last_frame_sent,
+            s.last_frame_acked,
+            s.sfl_loader.as_mut(),
+        ) {
             (Activity::WriteAndWait, None, None, Some(loader)) => {
                 let buf = slice::from_raw_parts(buff as *const u8, len as usize);
 
@@ -40,7 +45,7 @@ unsafe extern "C" fn our_p_write_file(
                     }) {
                         error!("Could not send packet 0: {}", e);
                     }
-            },
+            }
             (Activity::WriteAndWait, Some(sent), Some(acked), Some(loader)) if sent == acked => {
                 if let Err(e) = loader
                     .encode_data_frame(sent)
@@ -50,12 +55,13 @@ unsafe extern "C" fn our_p_write_file(
                         s.last_frame_sent = Some(sent + 1);
 
                         Ok(())
-                    }) {
-                        error!("Could not send packet {}: {}", sent, e);
-                    }
-            },
+                    })
+                {
+                    error!("Could not send packet {}: {}", sent, e);
+                }
+            }
             _ => {}
-        }   
+        }
 
         if let Some(write_file) = s.orig_writefile {
             return Ok(write_file);
@@ -173,7 +179,6 @@ fn inject_output(s: &mut State, buf: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
-
 pub unsafe extern "C" fn ttx_open_file(hooks: *mut tt::TTXFileHooks) {
     if let Err(e) = with_state_var(|s| {
         // SAFETY: Assumes TeraTerm passed us valid pointers.
@@ -207,4 +212,3 @@ pub unsafe extern "C" fn ttx_close_file(hooks: *mut tt::TTXFileHooks) {
         error!(target: "TTXCloseFile", "Could not close serial port: {}", e);
     }
 }
-
