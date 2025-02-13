@@ -223,9 +223,9 @@ unsafe extern "C" fn our_p_write_file(
                 if let Err(e) = loader
                     .encode_data_frame(0)
                     .map_err(|e| Error::FileIoError(e))
-                    .and_then(|frame| {
-                        trace!(target: "our_p_write_file", "Injecting packet: {:?}", frame.as_bytes());
-                        inject_output(s, &frame.as_bytes())?;
+                    .and_then(|(len, frame)| {
+                        trace!(target: "our_p_write_file", "Injecting packet: {:#X?}", &frame.as_bytes()[..len]);
+                        inject_output(s, &frame.as_bytes()[..len])?;
                         s.last_frame_sent = Some(0);
 
                         Ok(())
@@ -237,8 +237,8 @@ unsafe extern "C" fn our_p_write_file(
                 if let Err(e) = loader
                     .encode_data_frame(sent)
                     .map_err(|e| Error::FileIoError(e))
-                    .and_then(|frame| {
-                        inject_output(s, &frame.as_bytes())?;
+                    .and_then(|(len, frame)| {
+                        inject_output(s, &frame.as_bytes()[..len])?;
                         s.last_frame_sent = Some(sent + 1);
 
                         Ok(())

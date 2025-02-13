@@ -8,7 +8,7 @@ use std::{
 use crc;
 use zerocopy::{byteorder::big_endian::U16, Immutable, IntoBytes};
 
-const CCITT: crc::Crc<u16> = crc::Crc::<u16>::new(&crc::CRC_16_IBM_3740);
+const CCITT: crc::Crc<u16> = crc::Crc::<u16>::new(&crc::CRC_16_XMODEM);
 pub const MAGIC: &'static [u8] = b"sL5DdSMmkekro\n";
 pub const MAGIC_RESPONSE: &'static [u8] = b"z6IHG7cYDID6o\n";
 
@@ -71,11 +71,11 @@ impl<R> SflLoader<R> {
             reader,
             base,
             offs: 0,
-            chunk_size: 256,
+            chunk_size: 252,
         }
     }
 
-    pub fn encode_data_frame(&mut self, frame_num: u32) -> Result<Box<Frame>, io::Error>
+    pub fn encode_data_frame(&mut self, frame_num: u32) -> Result<(usize, Box<Frame>), io::Error>
     where
         R: Read + Seek,
     {
@@ -95,13 +95,13 @@ impl<R> SflLoader<R> {
         self.reader.seek(SeekFrom::Start(
             (frame_num * (self.chunk_size as u32)).into(),
         ))?;
-        let read_len = self.reader.read(&mut frame.payload[4..])?;
+        let read_len = self.reader.read(&mut frame.payload[4..(self.chunk_size as usize)])?;
         frame.len += read_len as u8;
 
-        let crc = CCITT.checksum(&frame.as_bytes()[offset_of!(Frame, cmd)..]);
+        let crc = CCITT.checksum(&frame.as_bytes()[offset_of!(Frame, cmd)..((self.chunk_size + 4) as usize)]);
         frame.crc = crc.into();
 
-        Ok(frame)
+        Ok(((self.chunk_size + 4) as usize, frame))
     }
 
     pub fn encode_boot_frame(&mut self, address: u32) -> Box<Frame> {
@@ -116,7 +116,7 @@ impl<R> SflLoader<R> {
         frame.payload[0..4].copy_from_slice(&addr_be);
         frame.len = 4;
 
-        let crc = CCITT.checksum(&frame.as_bytes()[offset_of!(Frame, cmd)..]);
+        let crc = CCITT.checksum(&frame.as_bytes()[offset_of!(Frame, cmd)..(4 + 4)]);
         frame.crc = crc.into();
 
         frame
@@ -125,6 +125,7 @@ impl<R> SflLoader<R> {
 
 #[derive(IntoBytes, Immutable)]
 #[repr(packed)]
+#[repr(C)]
 pub struct Frame {
     len: u8,
     crc: U16,
