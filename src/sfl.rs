@@ -1,9 +1,9 @@
-use std::{
-    fs::File,
-    io::{self, Read, Seek, SeekFrom},
-    mem::offset_of,
-    path::Path,
-};
+/*! Serial Flash Loader implementation. */
+
+use std::fs::File;
+use std::io::{self, Read, Seek, SeekFrom};
+use std::mem::offset_of;
+use std::path::Path;
 
 use crc;
 use zerocopy::{byteorder::big_endian::U16, Immutable, IntoBytes};
