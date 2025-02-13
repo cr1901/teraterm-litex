@@ -3,7 +3,7 @@ mod teraterm;
 
 use core::slice;
 use std::ffi::{c_void, OsString};
-use std::fmt;
+use std::{fmt, ptr};
 use std::fs::File;
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
@@ -12,7 +12,7 @@ use std::sync::Mutex;
 use log::*;
 use once_cell::sync::OnceCell;
 use rfd::FileDialog;
-use sfl::{MagicMatcher, SflLoader};
+use sfl::{MagicMatcher, SflLoader, MAGIC_RESPONSE};
 use stderrlog;
 use teraterm as tt;
 
@@ -41,17 +41,24 @@ struct State {
     activity: Activity,
     matcher: MagicMatcher,
     sfl_loader: Option<SflLoader<File>>,
+    frames_sent: Option<u32>,
+    frames_acked: Option<u32>
 }
 
 enum Activity {
     Inactive,
-    Active,
+    LookForMagic,
 }
 
 enum Error {
     CouldntUnlock(&'static str),
     WasEmpty(&'static str),
     WinError(windows::core::Error),
+    OutBuffOutOfBounds(u32),
+    OutBuffFull {
+        need: u32,
+        actual: u32
+    }
 }
 
 impl fmt::Display for Error {
@@ -65,7 +72,13 @@ impl fmt::Display for Error {
             }
             Error::WinError(e) => {
                 write!(f, "Windows error: {}", e)
-            }
+            },
+            Error::OutBuffOutOfBounds(s) => {
+                write!(f, "A write to TeraTerm's OutBuff would go out of bounds ({})", s)
+            },
+            Error::OutBuffFull { need, actual } => {
+                write!(f, "A write to TeraTerm's OutBuff would not fit (need {}, actual {})", need, actual)
+            },
         }
     }
 }
@@ -96,6 +109,8 @@ unsafe extern "C" fn ttx_init(ts: tt::PTTSet, cv: tt::PComVar) {
                 activity: Activity::Inactive,
                 matcher: MagicMatcher::new(sfl::MAGIC),
                 sfl_loader: None,
+                frames_acked: None,
+                frames_sent: None
             })
         }
         Err(_) => {
@@ -178,11 +193,16 @@ unsafe extern "C" fn our_p_read_file(
 
     match with_state_var(|s| {
         match &mut s.activity {
-            Activity::Active => {
+            Activity::LookForMagic => {
                 let chunk = slice::from_raw_parts(buff as *const u8, len as usize);
                 if s.matcher.look_for_match(chunk) {
                     s.matcher.reset();
                     info!(target: "our_p_read_file", "Found magic string.");
+
+                    match inject_output(s, &MAGIC_RESPONSE) {
+                        Ok(()) => {},
+                        Err(e) => error!("Could not inject magic response: {}", e)
+                    }
                 }
             }
             _ => {}
@@ -203,6 +223,55 @@ unsafe extern "C" fn our_p_read_file(
             return 0;
         }
     }
+}
+
+fn inject_output(s: &mut State, buf: &[u8]) -> Result<(), Error> {
+    // SAFETY: Assumes TeraTerm passed us valid pointers. We can't use
+    // &mut because I have no idea whether we truly have exclusive access.
+
+    let out_buff = unsafe { &raw mut (*s.cv).OutBuff };
+    let len = unsafe { (*s.cv).OutBuffCount } as u32;
+    let ptr = unsafe { (*s.cv).OutPtr } as u32;
+
+    if (ptr + len) >= tt::OutBuffSize {
+        return Err(Error::OutBuffOutOfBounds(ptr + len))
+    }
+
+    let max_out_size = tt::OutBuffSize - len;
+    if buf.len() > max_out_size as usize {
+        return Err(Error::OutBuffFull { need: buf.len() as u32, actual: max_out_size })
+    }
+
+    let src = unsafe { &raw const (*out_buff)[ptr as usize] };
+    let dst = unsafe { &raw mut (*out_buff)[0] };
+
+    // SAFETY:
+    // * We checked that src is in bounds.
+    // * dst must be in bounds because it's the beginning of out_buff.
+    // * u8 is Copy.
+    unsafe { ptr::copy(src, dst, len as usize) };
+
+    let our_buf_ptr = buf.as_ptr();
+    // SAFETY: If the initial bounds check at a non-zero offset passed, then
+    // so will this one. We've already got UB problems if len > ISIZE_MAX.
+    let our_dst = unsafe { dst.offset(len as isize) };
+
+    // SAFETY:
+    // * Our src is from Rust.
+    // * dst must be in bounds from previous checks.
+    // * u8 is Copy.
+    unsafe { ptr::copy(our_buf_ptr, our_dst, buf.len()) };
+
+    // OutBuff is NOT circular; ptr is "next value to be written", and
+    // cnt is "num of values left to write". Once cnt becomes 0, ptr also 
+    // gets reset to 0. (See "CommSend", which is the immediate parent
+    // function of PWriteFile).
+    unsafe {
+        *(&raw mut (*s.cv).OutBuffCount) = (buf.len() + len as usize) as i32;
+        *(&raw mut (*s.cv).OutPtr) = 0;
+    }
+
+    Ok(())
 }
 
 unsafe extern "C" fn ttx_modify_menu(menu: HMENU) {
@@ -313,7 +382,7 @@ unsafe extern "system" fn litex_setup_dialog(
                         match SflLoader::open(kernel_path.unwrap(), boot_addr.unwrap()) {
                             Ok(loader) => {
                                 s.sfl_loader = Some(loader);
-                                s.activity = Activity::Active;
+                                s.activity = Activity::LookForMagic;
                                 info!(target: "setup_dialog", "Plugin now actively searching for magic string.");
                             }
                             Err(e) => {
@@ -427,7 +496,7 @@ const TTX_EXPORTS: tt::TTXExports = tt::TTXExports {
 
 #[no_mangle]
 #[allow(non_snake_case)]
-fn TTXBind(_version: tt::WORD, exports: *mut tt::TTXExports) -> bool {
+extern "C" fn TTXBind(_version: tt::WORD, exports: *mut tt::TTXExports) -> bool {
     // SAFETY: Assumes that TeraTerm gave us a proper struct.
     unsafe {
         (&raw mut (*exports).loadOrder).write(TTX_EXPORTS.loadOrder);
