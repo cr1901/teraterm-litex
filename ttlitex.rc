@@ -28,8 +28,9 @@ FONT 9, "MS Shell Dlg"
     LTEXT "File", -1, 10, 10, 45, 10
     EDITTEXT IDC_LITEX_KERNEL, 60, 5, 110, 15, ES_AUTOHSCROLL
     LTEXT "Boot Address", -1, 10, 25, 45, 10
-    EDITTEXT IDC_LITEX_BOOT_ADDR, 60, 25, 110, 15
+    EDITTEXT IDC_LITEX_BOOT_ADDR, 60, 25, 87, 15
     PUSHBUTTON "...", IDC_LITEX_CHOOSE_KERNEL_BUTTON, 177, 5, 13, 14
+    AUTOCHECKBOX "Active", IDC_LITEX_ACTIVE, 155, 25, 35, 15, 0, WS_EX_RIGHT
 }
 
 //////////////////////////////////////////////////////////////////////////////

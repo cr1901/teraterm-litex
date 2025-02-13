@@ -6,6 +6,7 @@
 #define IDC_LITEX_KERNEL                    1002
 #define IDC_LITEX_BOOT_ADDR                 1003
 #define IDC_LITEX_CHOOSE_KERNEL_BUTTON      1004
+#define IDC_LITEX_ACTIVE                    1005
 
 #define IDD_SETUP_LITEX                     1001
 
@@ -14,7 +15,7 @@
         #define _APS_NO_MFC                 1
         #define _APS_NEXT_RESOURCE_VALUE    100
         #define _APS_NEXT_COMMAND_VALUE     100
-        #define _APS_NEXT_CONTROL_VALUE     1005
+        #define _APS_NEXT_CONTROL_VALUE     1006
         #define _APS_NEXT_SYMED_VALUE       300
     #endif
 #endif

@@ -3,9 +3,10 @@ mod teraterm;
 
 use core::slice;
 use std::ffi::{c_void, OsString};
-use std::{fmt, ptr};
+use std::fmt::Write;
+use std::{fmt, io, ptr};
 use std::fs::File;
-use std::os::windows::ffi::OsStringExt;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -28,6 +29,7 @@ pub const IDD_SETUP_LITEX: usize = 1001;
 pub const IDC_LITEX_KERNEL: usize = 1002;
 pub const IDC_LITEX_BOOT_ADDR: usize = 1003;
 pub const IDC_LITEX_CHOOSE_KERNEL_BUTTON: usize = 1004;
+pub const IDC_LITEX_ACTIVE: usize = 1005;
 
 unsafe impl Send for State {}
 
@@ -42,14 +44,18 @@ struct State {
     matcher: MagicMatcher,
     sfl_loader: Option<SflLoader<File>>,
     frames_sent: Option<u32>,
-    frames_acked: Option<u32>
+    frames_acked: Option<u32>,
+    filename: Option<PathBuf>,
+    addr: u32,
 }
 
+#[derive(PartialEq)]
 enum Activity {
     Inactive,
     LookForMagic,
 }
 
+#[derive(Debug)]
 enum Error {
     CouldntUnlock(&'static str),
     WasEmpty(&'static str),
@@ -58,7 +64,9 @@ enum Error {
     OutBuffFull {
         need: u32,
         actual: u32
-    }
+    },
+    FileIoError(io::Error),
+    BadAddressError(String)
 }
 
 impl fmt::Display for Error {
@@ -79,6 +87,12 @@ impl fmt::Display for Error {
             Error::OutBuffFull { need, actual } => {
                 write!(f, "A write to TeraTerm's OutBuff would not fit (need {}, actual {})", need, actual)
             },
+            Error::FileIoError(e) => {
+                write!(f, "Could not open or read kernel file: {}", e)
+            }
+            Error::BadAddressError(a) => {
+                write!(f, "Could not intepret address as a decimal or hex integer: {}", a)
+            }
         }
     }
 }
@@ -110,7 +124,9 @@ unsafe extern "C" fn ttx_init(ts: tt::PTTSet, cv: tt::PComVar) {
                 matcher: MagicMatcher::new(sfl::MAGIC),
                 sfl_loader: None,
                 frames_acked: None,
-                frames_sent: None
+                frames_sent: None,
+                filename: None,
+                addr: 0x40000000
             })
         }
         Err(_) => {
@@ -322,6 +338,21 @@ fn get_dlg_osstring(dialog: HWND, control: i32) -> Result<OsString, windows::cor
     }
 }
 
+fn set_dlg_osstring(dialog: HWND, control: i32, ) -> Result<OsString, windows::core::Error> {
+    let code_unit_len = get_buf_len(dialog, control)?;
+    let mut code_str: Vec<u16> = vec![0; code_unit_len + 1];
+    let used_len = unsafe { GetDlgItemTextW(dialog, control, &mut code_str) } as usize;
+
+    // We don't need the null terminator.
+    code_str.truncate(used_len);
+
+    if used_len == 0 {
+        return Err(windows::core::Error::from_win32());
+    } else {
+        return Ok(OsString::from_wide(&code_str));
+    }
+}
+
 unsafe extern "system" fn litex_setup_dialog(
     dialog: HWND,
     msg: u32,
@@ -333,66 +364,109 @@ unsafe extern "system" fn litex_setup_dialog(
             // TODO:
             // * Center Window
             // * SendMessage(EM_SETLIMITTEXT);
+
+            // Restore existing values.
+            let (maybe_file, addr, active) = with_state_var(|s| {
+                Ok((s.filename.clone(), s.addr, s.activity != Activity::Inactive))
+            }).unwrap_or((None, 0x40000000, false));
+
+            if let Some(file) = maybe_file {
+                let mut file_vec: Vec<u16> = file.as_os_str().encode_wide().collect();
+                file_vec.push(0);
+
+                let _ = SetDlgItemTextW(
+                    dialog,
+                    IDC_LITEX_KERNEL as i32,
+                    PCWSTR(file_vec.as_ptr()),
+                );
+            }
+
+            let mut addr_str = String::new();
+            let _ = write!(&mut addr_str, "{:#08x}", addr);
+            let addr_os: OsString = addr_str.into();
+            let mut addr_vec: Vec<u16> = addr_os.encode_wide().collect();
+            addr_vec.push(0);
+
             let _ = SetDlgItemTextW(
                 dialog,
                 IDC_LITEX_BOOT_ADDR as i32,
-                PCWSTR(u16cstr!("0x40000000").as_ptr()),
+                PCWSTR(addr_vec.as_ptr()),
             );
+
+            let _ = SendDlgItemMessageW(dialog, IDC_LITEX_ACTIVE as i32, BM_SETCHECK, WPARAM(active.into()), LPARAM(0));
             return true.into();
         }
         WM_COMMAND => match param_1.0 as i32 {
             p if p == IDOK.0 => {
                 trace!(target: "setup_dialog", "OK");
 
-                let kernel_path = match get_dlg_osstring(dialog, IDC_LITEX_KERNEL as i32) {
-                    Ok(kpath) => Some(PathBuf::from(kpath)),
-                    Err(e) => {
-                        error!(target: "setup_dialog", "Could not get kernel path buffer {:?}", e);
-                        None
-                    }
-                };
+                let active = SendDlgItemMessageW(dialog, IDC_LITEX_ACTIVE as i32, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 != 0;
 
-                let boot_addr = match get_dlg_osstring(dialog, IDC_LITEX_BOOT_ADDR as i32)
-                    .map(|os| os.to_string_lossy().into_owned())
-                {
-                    Ok(boot_str) => {
-                        // Attempt to parse various forms of the address.
+                let kernel_path = get_dlg_osstring(dialog, IDC_LITEX_KERNEL as i32).map(|kpath| PathBuf::from(kpath));
+
+                let boot_addr = get_dlg_osstring(dialog, IDC_LITEX_BOOT_ADDR as i32).map_err(Error::WinError)
+                    .and_then(|os| {
+                        let boot_str = os.to_string_lossy().into_owned();
+
                         if boot_str.starts_with("0X") || boot_str.starts_with("0x") {
                             let no_prefix = &boot_str[2..];
-                            u32::from_str_radix(no_prefix, 16).ok()
+                            u32::from_str_radix(no_prefix, 16).map_err(|_| Error::BadAddressError(boot_str))
                         } else {
                             if let Ok(addr) = u32::from_str_radix(&boot_str, 10) {
-                                Some(addr)
+                                Ok(addr)
                             } else {
-                                u32::from_str_radix(&boot_str, 16).ok()
+                                u32::from_str_radix(&boot_str, 16).map_err(|_| Error::BadAddressError(boot_str))
                             }
                         }
-                    }
-                    Err(e) => {
-                        error!(target: "setup_dialog", "Could not get boot address: {:?}", e);
-                        None
-                    }
-                };
+                    });
 
-                debug!(target: "setup_dialog", "Got kernel path: {:?}", kernel_path);
-                debug!(target: "setup_dialog", "Got boot address: {:?}", boot_addr);
+                debug!(target: "setup_dialog", "Kernel Path: {:?}", kernel_path);
+                debug!(target: "setup_dialog", "Boot Address: {:?}", boot_addr);
+                debug!(target: "setup_dialog", "Active: {:?}", active);
 
-                if kernel_path.is_some() && boot_addr.is_some() {
-                    if let Err(e) = with_state_var(|s| {
-                        match SflLoader::open(kernel_path.unwrap(), boot_addr.unwrap()) {
+                // FIXME: Error paths still need some tuning...
+                match (kernel_path, boot_addr, active) {
+                    (Ok(path), Ok(addr), true) => {
+                        match SflLoader::open(path.clone(), addr) {
                             Ok(loader) => {
-                                s.sfl_loader = Some(loader);
-                                s.activity = Activity::LookForMagic;
+                                let _ = with_state_var(|s| {
+                                    s.filename = Some(path);
+                                    s.addr = addr;
+                                    s.sfl_loader = Some(loader);
+                                    s.matcher.reset();
+                                    s.activity = Activity::LookForMagic;
+                                    Ok(())
+                                });
+
                                 info!(target: "setup_dialog", "Plugin now actively searching for magic string.");
-                            }
+                            },
                             Err(e) => {
                                 error!(target: "setup_dialog", "Could not open file: {}", e);
                             }
                         }
 
-                        Ok(())
-                    }) {
-                        error!(target: "setup_dialog", "Could not move plugin to active state: {}", e);
+                    },
+                    (kernel_path, addr, _) => {
+                        if let Err(e) = kernel_path.as_ref() {
+
+                            error!(target: "setup_dialog", "Bad filename: {}", e);
+
+                            /* let mut err_str = String::new();
+                            let _ = write!(&mut err_str, "Could not open file: {}", e);
+                            error!(target: "setup_dialog", "{}", err_str);
+
+                            let err_os: OsString = err_str.into();
+                            let err_vec: Vec<u16> = err_os.encode_wide().collect();
+                            MessageBoxW(Some(dialog), PCWSTR(err_vec.as_ptr()),
+                             PCWSTR(u16cstr!("LiteX Setup").as_ptr()), MB_OK | MB_ICONWARNING | MB_APPLMODAL); */
+                        }
+
+                        let _ = with_state_var(|s| {
+                            s.filename = kernel_path.ok();
+                            s.addr = addr.unwrap_or(0x40000000);
+                            s.activity = Activity::Inactive;
+                            Ok(())
+                        });
                     }
                 }
 
