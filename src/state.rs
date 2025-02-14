@@ -12,6 +12,7 @@ use std::ffi::OsString;
 
 use log::*;
 use once_cell::sync::OnceCell;
+use parse_int::parse;
 use stderrlog;
 
 use super::sfl::{self, MagicMatcher, SflLoader};
@@ -49,7 +50,7 @@ pub enum Activity {
     LookForMagic,
     // WritePacket,
     WaitResp,
-    WaitFinalResp
+    WaitFinalResp,
 }
 
 // SAFETY: Same rationale as above. I think it's Windows' problem to make sure
@@ -70,12 +71,22 @@ pub fn init_state_var(ts: tt::PTTSet, cv: tt::PComVar) -> Result<(), Error> {
 
     let mut filename: Option<PathBuf> = None;
     let mut activity: Activity = Activity::Inactive;
-    let addr = 0x40000000;
+    let mut addr = 0x40000000;
     let mut sfl_loader: Option<SflLoader<File>> = None;
 
     if cfg!(debug_assertions) {
         if let Ok(f) = env::var("TTX_LITEX_KERNEL") {
             debug!(target: "TTXInit", "Found TTX_LITEX_KERNEL override: {} {:?}", f, env::current_dir());
+            addr = env::var("TTX_LITEX_ADDRESS")
+                .inspect_err(|e| error!(target: "TTXInit", "{}", e))
+                .ok()
+                .and_then(|s| {
+                    parse::<u32>(&s)
+                        .inspect_err(|e| error!(target: "TTXInit", "{}", e))
+                        .ok()
+                })
+                .unwrap_or(addr);
+            debug!(target: "TTXInit", "Address is {:#08X}", addr);
 
             let path = PathBuf::from(OsString::from(f));
             match SflLoader::open(path.clone(), addr) {

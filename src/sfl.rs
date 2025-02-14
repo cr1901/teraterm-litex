@@ -98,7 +98,7 @@ impl<R> SflLoader<R> {
         ))?;
         let read_len = self
             .reader
-            .read(&mut frame.payload[4..])?;
+            .read(&mut frame.payload[4..((self.chunk_size + 4) as usize)])?;
         if read_len == 0 {
             return Ok(None);
         }
