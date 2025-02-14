@@ -4,7 +4,6 @@ use std::{fmt, io};
 
 #[derive(Debug)]
 pub enum Error {
-    CouldntUnlock(&'static str),
     WasEmpty(&'static str),
     WinError(windows::core::Error),
     OutBuffOutOfBounds(u32),
@@ -17,9 +16,6 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::CouldntUnlock(var) => {
-                write!(f, "couldnt unlock state var {}", var)
-            }
             Error::WasEmpty(var) => {
                 write!(f, "state var {} was empty when it shouldn't have", var)
             }

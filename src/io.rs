@@ -5,7 +5,7 @@ use std::ffi::c_void;
 use std::{io, ptr};
 
 use super::sfl::{Resp, MAGIC_RESPONSE};
-use super::state::{with_state_var, Activity, State};
+use super::state::{TTX_LITEX_STATE, Activity, State};
 use super::tt;
 use super::Error;
 use log::*;
@@ -91,7 +91,7 @@ unsafe extern "C" fn our_p_read_file(
     trace!(target: "our_p_read_file", "Entered");
 
     let mut num_read = 0;
-    with_state_var(|mut s| {
+    TTX_LITEX_STATE.with_borrow_mut(|mut s| {
         s.orig_readfile
             .ok_or(Error::WasEmpty("PReadFile"))
             .and_then(|read_file| {
@@ -263,7 +263,7 @@ fn inject_output(s: &mut State, buf: &[u8]) -> Result<(), Error> {
 }
 
 pub unsafe extern "C" fn ttx_open_file(hooks: *mut tt::TTXFileHooks) {
-    if let Err(e) = with_state_var(|s| {
+    TTX_LITEX_STATE.with_borrow_mut(|s| {
         // SAFETY: Assumes TeraTerm passed us valid pointers.
         s.orig_readfile = *(*hooks).PReadFile;
         // s.orig_writefile = *(*hooks).PWriteFile;
@@ -274,24 +274,16 @@ pub unsafe extern "C" fn ttx_open_file(hooks: *mut tt::TTXFileHooks) {
         // trace!(target: "TTXOpenFile", "s.orig_writefile <= {:?} ({:?})", &raw const s.orig_writefile, s.orig_writefile);
         trace!(target: "TTXOpenFile", "*(*hooks).PReadFile <= {:?}", our_p_read_file as * const ());
         // trace!(target: "TTXOpenFile", "*(*hooks).PWriteFile <= {:?}", our_p_write_file as * const ());
-
-        Ok(())
-    }) {
-        error!(target: "TTXOpenFile", "Could not prepare serial port: {}", e);
-    }
+    });
 }
 
 pub unsafe extern "C" fn ttx_close_file(hooks: *mut tt::TTXFileHooks) {
-    if let Err(e) = with_state_var(|s| {
+    TTX_LITEX_STATE.with_borrow_mut(|s| {
         // SAFETY: Assumes TeraTerm passed us valid pointers.
         *(*hooks).PReadFile = s.orig_readfile;
         // *(*hooks).PWriteFile = s.orig_writefile;
 
         trace!(target: "TTXCloseFile", "*(*hooks).PReadFile <= {:?}", *(*hooks).PReadFile);
         // trace!(target: "TTXCloseFile", "*(*hooks).PWriteFile <= {:?}", *(*hooks).PWriteFile);
-
-        Ok(())
-    }) {
-        error!(target: "TTXCloseFile", "Could not close serial port: {}", e);
-    }
+    });
 }

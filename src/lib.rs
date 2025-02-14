@@ -7,9 +7,16 @@ mod state;
 mod teraterm;
 mod ui;
 
+use std::env;
+use std::ffi::OsString;
+use std::fs::File;
+use std::path::PathBuf;
+
 use error::Error;
 use log::*;
-use state::{init_hinst_var, init_state_var};
+use parse_int::parse;
+use sfl::{MagicMatcher, SflLoader};
+use state::{Activity, State, OUR_HINST, TTX_LITEX_STATE};
 use teraterm as tt;
 
 use windows::Win32::Foundation::*;
@@ -58,9 +65,61 @@ extern "C" fn ttx_bind(_version: tt::WORD, exports: *mut tt::TTXExports) -> bool
 }
 
 unsafe extern "C" fn ttx_init(ts: tt::PTTSet, cv: tt::PComVar) {
-    if let Err(e) = init_state_var(ts, cv) {
-        error!(target: "TTXInit", "Could not set state: {}", e);
+    if cfg!(debug_assertions) {
+        let _ = stderrlog::new().verbosity(log::Level::Trace).init();
+    } else {
+        let _ = stderrlog::new().quiet(true).init();
     }
+
+    let mut filename: Option<PathBuf> = None;
+    let mut activity: Activity = Activity::Inactive;
+    let mut addr = 0x40000000;
+    let mut sfl_loader: Option<SflLoader<File>> = None;
+
+    if cfg!(debug_assertions) {
+        if let Ok(f) = env::var("TTX_LITEX_KERNEL") {
+            debug!(target: "TTXInit", "Found TTX_LITEX_KERNEL override: {} {:?}", f, env::current_dir());
+            addr = env::var("TTX_LITEX_ADDRESS")
+                .inspect_err(|e| error!(target: "TTXInit", "{}", e))
+                .ok()
+                .and_then(|s| {
+                    parse::<u32>(&s)
+                        .inspect_err(|e| error!(target: "TTXInit", "{}", e))
+                        .ok()
+                })
+                .unwrap_or(addr);
+            debug!(target: "TTXInit", "Address is {:#08X}", addr);
+
+            let path = PathBuf::from(OsString::from(f));
+            match SflLoader::open(path.clone(), addr) {
+                Ok(ldr) => {
+                    debug!(target: "TTXInit", "Forcing TTXLiteX directly into LookForMagic state");
+                    filename = Some(path);
+                    activity = Activity::LookForMagic;
+                    sfl_loader = Some(ldr);
+                }
+                Err(e) => {
+                    error!(target: "TTXInit", "Could not force TTXLiteX into LookForMagic state: {}", e);
+                }
+            }
+        }
+    }
+
+    TTX_LITEX_STATE.set(State {
+            ts,
+            cv,
+            orig_readfile: None,
+            orig_writefile: None,
+            file_menu: None,
+            transfer_menu: None,
+            activity,
+            matcher: MagicMatcher::new(sfl::MAGIC),
+            sfl_loader,
+            last_frame_acked: None,
+            last_frame_sent: None,
+            filename,
+            addr,
+    });
 }
 
 #[no_mangle]
@@ -68,7 +127,7 @@ unsafe extern "C" fn ttx_init(ts: tt::PTTSet, cv: tt::PComVar) {
 extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: u32, _: *mut ()) -> bool {
     match call_reason {
         DLL_PROCESS_ATTACH => {
-            let _ = init_hinst_var(dll_module);
+            let _ = OUR_HINST.set(dll_module);
         }
         DLL_PROCESS_DETACH => (),
         _ => (),

@@ -9,7 +9,7 @@ use log::*;
 use rfd::FileDialog;
 
 use super::sfl::SflLoader;
-use super::state::{get_hinst_var, with_state_var, Activity};
+use super::state::{OUR_HINST, TTX_LITEX_STATE, Activity};
 use super::tt;
 use super::Error;
 
@@ -66,10 +66,9 @@ pub unsafe extern "system" fn litex_setup_dialog(
             // * SetWindowLongPtr to avoid with_state_var (Dialog is modal).
 
             // Restore existing values.
-            let (maybe_file, addr, active) = with_state_var(|s| {
-                Ok((s.filename.clone(), s.addr, s.activity != Activity::Inactive))
-            })
-            .unwrap_or((None, 0x40000000, false));
+            let (maybe_file, addr, active) = TTX_LITEX_STATE.with_borrow(|s| {
+                (s.filename.clone(), s.addr, s.activity != Activity::Inactive)
+            });
 
             if let Some(file) = maybe_file {
                 let mut file_vec: Vec<u16> = file.as_os_str().encode_wide().collect();
@@ -142,7 +141,7 @@ pub unsafe extern "system" fn litex_setup_dialog(
                 match (kernel_path, boot_addr, active) {
                     (Ok(path), Ok(addr), true) => match SflLoader::open(path.clone(), addr) {
                         Ok(loader) => {
-                            let _ = with_state_var(|s| {
+                            TTX_LITEX_STATE.with_borrow_mut(|s| {
                                 s.filename = Some(path);
                                 s.addr = addr;
                                 s.sfl_loader = Some(loader);
@@ -150,7 +149,6 @@ pub unsafe extern "system" fn litex_setup_dialog(
                                 s.activity = Activity::LookForMagic;
                                 s.last_frame_acked = None;
                                 s.last_frame_sent = None;
-                                Ok(())
                             });
 
                             info!(target: "setup_dialog", "Plugin now actively searching for magic string.");
@@ -173,11 +171,10 @@ pub unsafe extern "system" fn litex_setup_dialog(
                              PCWSTR(u16cstr!("LiteX Setup").as_ptr()), MB_OK | MB_ICONWARNING | MB_APPLMODAL); */
                         }
 
-                        let _ = with_state_var(|s| {
+                        TTX_LITEX_STATE.with_borrow_mut(|s| {
                             s.filename = kernel_path.ok();
                             s.addr = addr.unwrap_or(0x40000000);
                             s.activity = Activity::Inactive;
-                            Ok(())
                         });
                     }
                 }
@@ -210,7 +207,7 @@ pub unsafe extern "system" fn litex_setup_dialog(
 }
 
 pub unsafe extern "C" fn ttx_modify_menu(menu: HMENU) {
-    if let Err(e) = with_state_var(|s| {
+    if let Err(e) = TTX_LITEX_STATE.with_borrow_mut(|s| {
         s.file_menu = Some(GetSubMenu(menu, tt::ID_FILE as i32));
         // ID_TRANSFER == 9 and doesn't work. Was the constant
         // never updated?
@@ -221,10 +218,7 @@ pub unsafe extern "C" fn ttx_modify_menu(menu: HMENU) {
             MF_ENABLED | MF_STRING,
             ID_MENU_LITEX,
             PCWSTR(u16cstr!("LiteX").as_ptr()),
-        )
-        .map_err(|e| Error::WinError(e))?;
-
-        Ok(())
+        ).map_err(|e| Error::WinError(e))
     }) {
         debug!(target: "TTXModifyMenu", "Could not modify menu: {}", e);
     }
@@ -235,9 +229,9 @@ pub unsafe extern "C" fn ttx_process_command(window: HWND, cmd: u16) -> i32 {
         ID_MENU_LITEX => {
             debug!(target: "TTXProcessCommand", "LiteX option clicked.");
 
-            if let Err(e) = get_hinst_var().and_then(|hinst| {
+            if let Err(e) = {
                 let res = DialogBoxParamW(
-                    Some(hinst),
+                    Some(OUR_HINST.get()),
                     PCWSTR(IDD_SETUP_LITEX as *const u16),
                     Some(window),
                     Some(Some(litex_setup_dialog)),
@@ -249,7 +243,7 @@ pub unsafe extern "C" fn ttx_process_command(window: HWND, cmd: u16) -> i32 {
                 } else {
                     Ok(())
                 }
-            }) {
+            } {
                 debug!(target: "TTXProcessCommand", "Could not open LiteX dialog: {}", e)
             }
 
