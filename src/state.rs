@@ -47,7 +47,9 @@ pub struct State {
 pub enum Activity {
     Inactive,
     LookForMagic,
-    WriteAndWait,
+    // WritePacket,
+    WaitResp,
+    WaitFinalResp
 }
 
 // SAFETY: Same rationale as above. I think it's Windows' problem to make sure

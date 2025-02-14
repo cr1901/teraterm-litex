@@ -2,9 +2,9 @@
 
 use core::slice;
 use std::ffi::c_void;
-use std::ptr;
+use std::{io, ptr};
 
-use super::sfl::MAGIC_RESPONSE;
+use super::sfl::{Resp, MAGIC_RESPONSE};
 use super::state::{with_state_var, Activity, State};
 use super::tt;
 use super::Error;
@@ -13,7 +13,7 @@ use log::*;
 use windows::Win32::System::IO::OVERLAPPED;
 use zerocopy::IntoBytes;
 
-#[allow(unused)]
+/* #[allow(unused)]
 unsafe extern "C" fn our_p_write_file(
     fh: *mut c_void,
     buff: *const c_void,
@@ -78,7 +78,7 @@ unsafe extern "C" fn our_p_write_file(
             return 0;
         }
     }
-}
+} */
 
 #[allow(unused)]
 unsafe extern "C" fn our_p_read_file(
@@ -90,41 +90,124 @@ unsafe extern "C" fn our_p_read_file(
 ) -> i32 {
     trace!(target: "our_p_read_file", "Entered");
 
-    match with_state_var(|s| {
-        match &mut s.activity {
-            Activity::LookForMagic => {
-                let chunk = slice::from_raw_parts(buff as *const u8, len as usize);
-                if s.matcher.look_for_match(chunk) {
-                    s.matcher.reset();
-                    info!(target: "our_p_read_file", "Found magic string.");
+    let mut num_read = 0;
+    with_state_var(|mut s| {
+        s.orig_readfile
+            .ok_or(Error::WasEmpty("PReadFile"))
+            .and_then(|read_file| {
+                trace!(target: "our_p_read_file", "Running original PReadFile at {:?}.", read_file);
+                num_read = read_file(fh, buff, len, read_bytes, wol);
 
-                    match inject_output(s, &MAGIC_RESPONSE) {
-                        Ok(()) => {
-                            s.activity = Activity::WriteAndWait;
-                        }
-                        Err(e) => error!("Could not inject magic response: {}", e),
+                if *read_bytes == 0 {
+                    return Ok(num_read);
+                }
+
+                let chunk = slice::from_raw_parts(buff as *const u8, *read_bytes as usize);
+                drive_sfl(&mut s, chunk)?;
+                Ok(num_read)
+            })
+    })
+    .inspect_err(|e| error!(target: "our_p_read_file", "Failed to drive SFL FSM: {}", e))
+    .unwrap_or(num_read)
+}
+
+fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<(), Error> {
+    // todo!()
+    match &mut s.activity {
+        Activity::Inactive => {},
+        Activity::LookForMagic => {
+            if s.matcher.look_for_match(chunk) {
+                s.matcher.reset();
+                info!(target: "drive_sfl", "Found magic string.");
+
+                return inject_output(s, &MAGIC_RESPONSE)
+                    // .inspect_err(|e| error!("Could not inject magic response: {}", e))
+                    .and_then(|_| {
+                        let (used, frame) = s
+                            .sfl_loader
+                            .as_mut()
+                            .ok_or(Error::WasEmpty("loader"))?
+                            .encode_data_frame(0)
+                            .map_err(|e| Error::FileIoError(e))?
+                            .ok_or(Error::FileIoError(io::Error::new(
+                                io::ErrorKind::UnexpectedEof,
+                                "input file was empty",
+                            )))?;
+                        trace!("{:X?}", frame);
+                        inject_output(s, &frame.as_bytes()[..used])?;
+
+                        s.last_frame_sent = Some(0);
+                        s.activity = Activity::WaitResp;
+
+                        Ok(())
+                    });
+                // .inspect_err(|e| error!("Could not write initial packet: {}", e));
+            } else {
+                return Ok(());
+            }
+        }
+        Activity::WaitResp => {
+            match Resp::try_from(chunk[0]).map_err(|_| Error::UnexpectedResponse(chunk[0]))? {
+                Resp::Success => {
+                    s.last_frame_acked = Some(s.last_frame_acked.map_or(0, |ack| ack + 1));
+
+                    let loader = s.sfl_loader.as_mut().ok_or(Error::WasEmpty("loader"))?;
+
+                    let next_frame = s.last_frame_sent.map_or(0, |sent| sent + 1);
+                    if let Some((used, frame)) = loader.encode_data_frame(next_frame).map_err(|e| Error::FileIoError(e))? {
+                        trace!("{:X?}", frame);
+                        inject_output(s, &frame.as_bytes()[..used])?;
+                        s.last_frame_sent = Some(next_frame);
+                    } else {
+                        let (used, frame) = loader.encode_boot_frame(s.addr);
+                        inject_output(s, &frame.as_bytes()[..used])?;
+                        s.activity = Activity::WaitFinalResp;
                     }
+                    // if let Some((used, frame)) =
+                    //     .encode_data_frame(0)
+                    //     .map_err(|e| Error::FileIoError(e))?
+                    // {
+                    //     inject_output(s, &frame.as_bytes()[..used])?;
+                    //     s.last_frame_sent = Some(s.last_frame_sent.map_or(0, |sent| sent + 1));
+                    // } else {
+
+                    // }
+                }
+                Resp::CrcError | Resp::Unknown | Resp::AckError => {
+                    // frame_no = Some(s.last_frame_acked.map_or(0, |ack| ack + 1));
+                    // info!(target: "drive_sfl", "CRC Error.");
+                    // let (used, frame) = s
+                    //         .sfl_loader
+                    //         .as_mut()
+                    //         .ok_or(Error::WasEmpty("loader"))?
+                    //         .encode_data_frame(0)
+                    //         .map_err(|e| Error::FileIoError(e))?
+                    //         .ok_or(Error::FileIoError(io::Error::new(
+                    //             io::ErrorKind::UnexpectedEof,
+                    //             "input file was empty",
+                    //         )))?;
+                    // inject_output(s, &frame.as_bytes()[..used])?;
                 }
             }
-            Activity::WriteAndWait => {}
-            _ => {}
-        }
+            // .inspect_err(|e| error!("Could not inject magic response: {}", e));
 
-        if let Some(read_file) = s.orig_readfile {
-            return Ok(read_file);
-        } else {
-            return Err(Error::WasEmpty("PReadFile"));
-        }
-    }) {
-        Ok(rf) => {
-            trace!(target: "our_p_read_file", "Running original PReadFile at {:?}.", rf);
-            return rf(fh, buff, len, read_bytes, wol);
-        }
-        Err(e) => {
-            error!(target: "our_p_read_file", "Could not call original PWriteFile: {}", e);
-            return 0;
+            /* Only check the initial frame so we know whether we  */
+        },
+        Activity::WaitFinalResp => {
+            match Resp::try_from(chunk[0]).map_err(|_| Error::UnexpectedResponse(chunk[0]))? {
+                Resp::Success => {
+                    s.last_frame_acked = None;
+                    s.last_frame_sent = None;
+                    s.activity = Activity::LookForMagic;
+                }
+                Resp::CrcError | Resp::Unknown | Resp::AckError => {
+
+                }
+            }
         }
     }
+
+    return Ok(());
 }
 
 fn inject_output(s: &mut State, buf: &[u8]) -> Result<(), Error> {
@@ -183,14 +266,14 @@ pub unsafe extern "C" fn ttx_open_file(hooks: *mut tt::TTXFileHooks) {
     if let Err(e) = with_state_var(|s| {
         // SAFETY: Assumes TeraTerm passed us valid pointers.
         s.orig_readfile = *(*hooks).PReadFile;
-        s.orig_writefile = *(*hooks).PWriteFile;
+        // s.orig_writefile = *(*hooks).PWriteFile;
         *(*hooks).PReadFile = Some(our_p_read_file);
-        *(*hooks).PWriteFile = Some(our_p_write_file);
+        // *(*hooks).PWriteFile = Some(our_p_write_file);
 
         trace!(target: "TTXOpenFile", "s.orig_readfile <= {:?} ({:?})", &raw const s.orig_readfile, s.orig_readfile);
-        trace!(target: "TTXOpenFile", "s.orig_writefile <= {:?} ({:?})", &raw const s.orig_writefile, s.orig_writefile);
+        // trace!(target: "TTXOpenFile", "s.orig_writefile <= {:?} ({:?})", &raw const s.orig_writefile, s.orig_writefile);
         trace!(target: "TTXOpenFile", "*(*hooks).PReadFile <= {:?}", our_p_read_file as * const ());
-        trace!(target: "TTXOpenFile", "*(*hooks).PWriteFile <= {:?}", our_p_write_file as * const ());
+        // trace!(target: "TTXOpenFile", "*(*hooks).PWriteFile <= {:?}", our_p_write_file as * const ());
 
         Ok(())
     }) {
@@ -202,10 +285,10 @@ pub unsafe extern "C" fn ttx_close_file(hooks: *mut tt::TTXFileHooks) {
     if let Err(e) = with_state_var(|s| {
         // SAFETY: Assumes TeraTerm passed us valid pointers.
         *(*hooks).PReadFile = s.orig_readfile;
-        *(*hooks).PWriteFile = s.orig_writefile;
+        // *(*hooks).PWriteFile = s.orig_writefile;
 
         trace!(target: "TTXCloseFile", "*(*hooks).PReadFile <= {:?}", *(*hooks).PReadFile);
-        trace!(target: "TTXCloseFile", "*(*hooks).PWriteFile <= {:?}", *(*hooks).PWriteFile);
+        // trace!(target: "TTXCloseFile", "*(*hooks).PWriteFile <= {:?}", *(*hooks).PWriteFile);
 
         Ok(())
     }) {

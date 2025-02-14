@@ -11,6 +11,7 @@ pub enum Error {
     OutBuffFull { need: u32, actual: u32 },
     FileIoError(io::Error),
     BadAddressError(String),
+    UnexpectedResponse(u8),
 }
 
 impl fmt::Display for Error {
@@ -48,6 +49,9 @@ impl fmt::Display for Error {
                     "Could not intepret address as a decimal or hex integer: {}",
                     a
                 )
+            },
+            Error::UnexpectedResponse(r) => {
+                write!(f, "Received an invalid response char: {} ({})", r, *r as char)
             }
         }
     }

@@ -17,7 +17,7 @@ pub struct MagicMatcher {
     state: usize,
 }
 
-#[derive(IntoBytes, Immutable)]
+#[derive(IntoBytes, Immutable, Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum Cmd {
     Abort = 0,
@@ -26,6 +26,7 @@ pub enum Cmd {
 }
 
 #[repr(u8)]
+#[derive(Debug)]
 pub enum Resp {
     Success = b'K',
     CrcError = b'C',
@@ -71,11 +72,11 @@ impl<R> SflLoader<R> {
             reader,
             base,
             offs: 0,
-            chunk_size: 252,
+            chunk_size: 251,
         }
     }
 
-    pub fn encode_data_frame(&mut self, frame_num: u32) -> Result<(usize, Box<Frame>), io::Error>
+    pub fn encode_data_frame(&mut self, frame_num: u32) -> Result<Option<(usize, Box<Frame>)>, io::Error>
     where
         R: Read + Seek,
     {
@@ -97,17 +98,20 @@ impl<R> SflLoader<R> {
         ))?;
         let read_len = self
             .reader
-            .read(&mut frame.payload[4..(self.chunk_size as usize)])?;
+            .read(&mut frame.payload[4..])?;
+        if read_len == 0 {
+            return Ok(None);
+        }
         frame.len += read_len as u8;
 
         let crc = CCITT
-            .checksum(&frame.as_bytes()[offset_of!(Frame, cmd)..((self.chunk_size + 4) as usize)]);
+            .checksum(&frame.as_bytes()[offset_of!(Frame, cmd)..((read_len + 4 + 4) as usize)]);
         frame.crc = crc.into();
 
-        Ok(((self.chunk_size + 4) as usize, frame))
+        Ok(Some(((read_len + 4 + 4) as usize, frame)))
     }
 
-    pub fn encode_boot_frame(&mut self, address: u32) -> Box<Frame> {
+    pub fn encode_boot_frame(&mut self, address: u32) -> (usize, Box<Frame>) {
         let mut frame = Box::new(Frame {
             len: 0,
             crc: 0.into(),
@@ -122,11 +126,11 @@ impl<R> SflLoader<R> {
         let crc = CCITT.checksum(&frame.as_bytes()[offset_of!(Frame, cmd)..(4 + 4)]);
         frame.crc = crc.into();
 
-        frame
+        (4 + 4, frame)
     }
 }
 
-#[derive(IntoBytes, Immutable)]
+#[derive(IntoBytes, Immutable, Debug)]
 #[repr(packed)]
 #[repr(C)]
 pub struct Frame {
