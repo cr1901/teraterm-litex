@@ -35,7 +35,7 @@ pub struct State {
     pub curr_frame: Option<Box<Frame>>,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Copy)]
 pub enum Activity {
     Inactive,
     LookForMagic,

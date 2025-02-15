@@ -15,6 +15,14 @@ use log::*;
 
 use windows::Win32::System::IO::OVERLAPPED;
 
+enum ReadAction {
+    PassThru,
+    Swallow,
+    Replace(String),
+    Append(String),
+    Prepend(String)
+}
+
 #[allow(unused)]
 unsafe extern "C" fn our_p_read_file(
     fh: *mut c_void,
@@ -25,29 +33,62 @@ unsafe extern "C" fn our_p_read_file(
 ) -> i32 {
     trace!(target: "our_p_read_file", "Entered");
 
-    let mut num_read = 0;
+    let mut rf_ret = 0;
     TTX_LITEX_STATE
         .with_borrow_mut(|mut s| {
             let read_file = s
                 .orig_readfile
                 .expect("PReadFile should've been set by TTXOpenFile");
             trace!(target: "our_p_read_file", "Running original PReadFile at {:?}.", read_file);
-            num_read = read_file(fh, buff, len, read_bytes, wol);
+            rf_ret = read_file(fh, buff, len, read_bytes, wol);
 
             if *read_bytes == 0 {
-                return Ok(num_read);
+                return Ok(rf_ret);
             }
 
+            // Not that InBuff is NOT circular either; ptr is "next value to be read",
+            // and cnt is "num of values left to read". On entry, "CommReceive", which
+            // is the immediate parent function of PReadFile, will move the unread part
+            // of InBuff to offset 0 and set InPtr to 0 (See "Compact buffer" comment).
+            // Trying to interfere with this by writing InBuff directly messes out
+            // terminal output, so we inject anything we want to write to the
+            // screen as the return value of our hook.
             let chunk = slice::from_raw_parts(buff as *const u8, *read_bytes as usize);
-            drive_sfl(&mut s, chunk)?;
+            match drive_sfl(&mut s, chunk)? {
+                ReadAction::PassThru => {},
+                ReadAction::Swallow => {
+                    *read_bytes = 0;
+                },
+                ReadAction::Replace(s) => {
+                    ptr::copy_nonoverlapping(s.as_ptr(), buff as *mut u8, s.len());
+                    *read_bytes = s.len() as u32;
+                },
+                ReadAction::Append(s) => {
+                    if (len - *read_bytes) >= (s.len() as u32) {
+                        ptr::copy_nonoverlapping(s.as_ptr(), buff.offset(*read_bytes as isize) as *mut u8, s.len());
+                        *read_bytes += s.len() as u32;
+                    }
+                }
+                ReadAction::Prepend(s) => {
+                    if (len - *read_bytes) >= (s.len() as u32) {
+                        // XXX: Remove the last acknowledgment 'K' in the string. :)
+                        // Maybe I should make an "ReplaceFirstAndPrepend" action.
+                        *(buff as *mut u8) = b'\r';
 
-            Ok::<_,Error>(num_read)
+                        ptr::copy(buff, buff.offset(s.len() as isize), *read_bytes as usize);
+                        ptr::copy_nonoverlapping(s.as_ptr(), buff as *mut u8, s.len());
+                        *read_bytes += s.len() as u32;
+                    }
+                }
+            }
+
+            Ok::<_,Error>(rf_ret)
         })
         .inspect_err(|e| error!(target: "our_p_read_file", "Failed to drive SFL FSM: {}", e))
-        .unwrap_or(num_read)
+        .unwrap_or(rf_ret)
 }
 
-fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<(), Error> {
+fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<ReadAction, Error> {
     fn redo_last_frame(s: &mut State, err: Resp) -> Result<(), Error> {
         info!(target: "drive_sfl", "SFL Error: {}, resending current", err);
         let frame = s.curr_frame.take().expect("a previous frame should've been saved before asking to redo a frame");
@@ -58,12 +99,11 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<(), Error> {
         Ok(())
     }
 
-    // todo!()
     match &mut s.activity {
-        Activity::Inactive => {}
+        Activity::Inactive => { Ok(ReadAction::PassThru) }
         Activity::LookForMagic => {
             if !s.matcher.look_for_match(chunk) {
-                return Ok(());
+                return Ok(ReadAction::PassThru);
             }
 
             s.matcher.reset();
@@ -106,7 +146,7 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<(), Error> {
             s.curr_frame = Some(frame);
             s.last_frame_sent = Some(0);
 
-            return Ok(());
+            Ok(ReadAction::Append("\r\x1B[0;36m[TTXLiteX] Uploading File\x1B[0m ".to_string()))
         }
         Activity::WaitResp => {
             match Resp::try_from(chunk[0]).map_err(|_| Error::UnexpectedResponse(chunk[0]))? {
@@ -136,9 +176,11 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<(), Error> {
                             s.activity = Activity::WaitFinalResp;
                         }
                     }
+
+                    Ok(ReadAction::Replace(".".to_string()))
                 }
                 err @ (Resp::CrcError | Resp::Unknown | Resp::AckError) => {
-                    return redo_last_frame(s, err);
+                    redo_last_frame(s, err).map(|_| ReadAction::Swallow)
                 }
             }
         }
@@ -148,15 +190,15 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<(), Error> {
                     s.last_frame_acked = None;
                     s.last_frame_sent = None;
                     s.activity = Activity::LookForMagic;
+
+                    Ok(ReadAction::Prepend("\r\n\x1B[0;36m[TTXLiteX] Done!\x1B[0m\r\n\r\n".to_string()))
                 }
                 err @ (Resp::CrcError | Resp::Unknown | Resp::AckError) => {
-                    return redo_last_frame(s, err);
+                    redo_last_frame(s, err).map(|_| ReadAction::Swallow)
                 }
             }
         }
     }
-
-    return Ok(());
 }
 
 fn inject_output(s: &mut State, buf: &[u8]) -> Result<(), Error> {
