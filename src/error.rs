@@ -4,7 +4,6 @@ use std::{fmt, io};
 
 #[derive(Debug)]
 pub enum Error {
-    WasEmpty(&'static str),
     WinError(windows::core::Error),
     OutBuffOutOfBounds(u32),
     OutBuffFull { need: u32, actual: u32 },
@@ -16,9 +15,6 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::WasEmpty(var) => {
-                write!(f, "state var {} was empty when it shouldn't have", var)
-            }
             Error::WinError(e) => {
                 write!(f, "Windows error: {}", e)
             }

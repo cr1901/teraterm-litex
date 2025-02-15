@@ -6,6 +6,7 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
 
 use log::*;
+use parse_int::parse;
 use rfd::FileDialog;
 
 use super::state::{Activity, OUR_HINST, TTX_LITEX_STATE};
@@ -44,7 +45,7 @@ fn get_dlg_osstring(dialog: HWND, control: i32) -> Result<OsString, windows::cor
     // We don't need the null terminator.
     code_str.truncate(used_len);
 
-    if used_len == 0 {
+    if used_len == 0 && windows::core::Error::from_win32().code().0 != 0 {
         return Err(windows::core::Error::from_win32());
     } else {
         return Ok(OsString::from_wide(&code_str));
@@ -62,7 +63,6 @@ pub unsafe extern "system" fn litex_setup_dialog(
             // TODO:
             // * Center Window
             // * SendMessage(EM_SETLIMITTEXT);
-            // * SetWindowLongPtr to avoid with_state_var (Dialog is modal).
 
             // Restore existing values.
             let (maybe_file, addr, active) = TTX_LITEX_STATE
@@ -109,68 +109,40 @@ pub unsafe extern "system" fn litex_setup_dialog(
                 )
                 .0 != 0;
 
+                // TODO: If both are clear, Windows returns "Handle is invalid" for both.
+                // If only path is clear, Windows returns "Handle is invalid" for path.
+                // If only address is clear, Windows returns empty string for address.
+                // Why?
                 let kernel_path = get_dlg_osstring(dialog, IDC_LITEX_KERNEL as i32)
+                    .map_err(Error::WinError)
                     .map(|kpath| PathBuf::from(kpath));
 
                 let boot_addr = get_dlg_osstring(dialog, IDC_LITEX_BOOT_ADDR as i32)
                     .map_err(Error::WinError)
                     .and_then(|os| {
                         let boot_str = os.to_string_lossy().into_owned();
-
-                        if boot_str.starts_with("0X") || boot_str.starts_with("0x") {
-                            let no_prefix = &boot_str[2..];
-                            u32::from_str_radix(no_prefix, 16)
-                                .map_err(|_| Error::BadAddressError(boot_str))
-                        } else {
-                            if let Ok(addr) = u32::from_str_radix(&boot_str, 10) {
-                                Ok(addr)
-                            } else {
-                                u32::from_str_radix(&boot_str, 16)
-                                    .map_err(|_| Error::BadAddressError(boot_str))
-                            }
-                        }
+                        parse::<u32>(&boot_str).map_err(|_| Error::BadAddressError(boot_str))
                     });
 
                 debug!(target: "setup_dialog", "Kernel Path: {:?}", kernel_path);
                 debug!(target: "setup_dialog", "Boot Address: {:?}", boot_addr);
                 debug!(target: "setup_dialog", "Active: {:?}", active);
 
-                // FIXME: Error paths still need some tuning...
-                match (kernel_path, boot_addr, active) {
-                    (Ok(path), Ok(addr), true) => {
-                        TTX_LITEX_STATE.with_borrow_mut(|s| {
-                            s.filename = Some(path);
-                            s.addr = addr;
-                            // s.sfl_loader = Some(loader);
-                            s.matcher.reset();
-                            s.activity = Activity::LookForMagic;
-                            s.last_frame_acked = None;
-                            s.last_frame_sent = None;
-                        });
+                TTX_LITEX_STATE.with_borrow_mut(|s| {
+                    s.filename = kernel_path.ok();
+                    s.addr = boot_addr.as_ref().copied().unwrap_or(0x40000000);
+
+                    if s.filename.is_some() && boot_addr.is_ok() && active {
+                        s.matcher.reset();
+                        s.activity = Activity::LookForMagic;
+                        s.last_frame_acked = None;
+                        s.last_frame_sent = None;
 
                         info!(target: "setup_dialog", "Plugin now actively searching for magic string.");
+                    } else {
+                        s.activity = Activity::Inactive;
                     }
-                    (kernel_path, addr, _) => {
-                        if let Err(e) = kernel_path.as_ref() {
-                            error!(target: "setup_dialog", "Bad filename: {}", e);
-
-                            /* let mut err_str = String::new();
-                            let _ = write!(&mut err_str, "Could not open file: {}", e);
-                            error!(target: "setup_dialog", "{}", err_str);
-
-                            let err_os: OsString = err_str.into();
-                            let err_vec: Vec<u16> = err_os.encode_wide().collect();
-                            MessageBoxW(Some(dialog), PCWSTR(err_vec.as_ptr()),
-                             PCWSTR(u16cstr!("LiteX Setup").as_ptr()), MB_OK | MB_ICONWARNING | MB_APPLMODAL); */
-                        }
-
-                        TTX_LITEX_STATE.with_borrow_mut(|s| {
-                            s.filename = kernel_path.ok();
-                            s.addr = addr.unwrap_or(0x40000000);
-                            s.activity = Activity::Inactive;
-                        });
-                    }
-                }
+                });
 
                 let _ = EndDialog(dialog, IDOK.0 as isize);
                 return true.into();
@@ -200,22 +172,17 @@ pub unsafe extern "system" fn litex_setup_dialog(
 }
 
 pub unsafe extern "C" fn ttx_modify_menu(menu: HMENU) {
-    if let Err(e) = TTX_LITEX_STATE.with_borrow_mut(|s| {
-        s.file_menu = Some(GetSubMenu(menu, tt::ID_FILE as i32));
-        // ID_TRANSFER == 9 and doesn't work. Was the constant
-        // never updated?
-        s.transfer_menu = Some(GetSubMenu(s.file_menu.unwrap(), 11));
+    let file_menu = GetSubMenu(menu, tt::ID_FILE as i32);
+    // ID_TRANSFER == 9 in TeraTerm, and it doesn't work. Was the constant
+    // never updated?
+    let transfer_menu = GetSubMenu(file_menu, 11);
 
-        AppendMenuW(
-            s.transfer_menu.unwrap(),
-            MF_ENABLED | MF_STRING,
-            ID_MENU_LITEX,
-            PCWSTR(u16cstr!("LiteX").as_ptr()),
-        )
-        .map_err(|e| Error::WinError(e))
-    }) {
-        debug!(target: "TTXModifyMenu", "Could not modify menu: {}", e);
-    }
+    let _ = AppendMenuW(
+        transfer_menu,
+        MF_ENABLED | MF_STRING,
+        ID_MENU_LITEX,
+        PCWSTR(u16cstr!("LiteX").as_ptr()),
+    );
 }
 
 pub unsafe extern "C" fn ttx_process_command(window: HWND, cmd: u16) -> i32 {
@@ -223,22 +190,16 @@ pub unsafe extern "C" fn ttx_process_command(window: HWND, cmd: u16) -> i32 {
         ID_MENU_LITEX => {
             debug!(target: "TTXProcessCommand", "LiteX option clicked.");
 
-            if let Err(e) = {
-                let res = DialogBoxParamW(
-                    Some(OUR_HINST.get()),
-                    PCWSTR(IDD_SETUP_LITEX as *const u16),
-                    Some(window),
-                    Some(Some(litex_setup_dialog)),
-                    LPARAM(0),
-                );
+            let res = DialogBoxParamW(
+                Some(OUR_HINST.get()),
+                PCWSTR(IDD_SETUP_LITEX as *const u16),
+                Some(window),
+                Some(Some(litex_setup_dialog)),
+                LPARAM(0),
+            );
 
-                if res <= 0 {
-                    Err(Error::WinError(GetLastError().into()))
-                } else {
-                    Ok(())
-                }
-            } {
-                debug!(target: "TTXProcessCommand", "Could not open LiteX dialog: {}", e)
+            if res <= 0 {
+                debug!(target: "TTXProcessCommand", "Could not open LiteX dialog: {}", Error::WinError(GetLastError().into()))
             }
 
             return 1;

@@ -28,26 +28,36 @@ unsafe extern "C" fn our_p_read_file(
     let mut num_read = 0;
     TTX_LITEX_STATE
         .with_borrow_mut(|mut s| {
-            s.orig_readfile
-            .ok_or(Error::WasEmpty("PReadFile"))
-            .and_then(|read_file| {
-                trace!(target: "our_p_read_file", "Running original PReadFile at {:?}.", read_file);
-                num_read = read_file(fh, buff, len, read_bytes, wol);
+            let read_file = s
+                .orig_readfile
+                .expect("PReadFile should've been set by TTXOpenFile");
+            trace!(target: "our_p_read_file", "Running original PReadFile at {:?}.", read_file);
+            num_read = read_file(fh, buff, len, read_bytes, wol);
 
-                if *read_bytes == 0 {
-                    return Ok(num_read);
-                }
+            if *read_bytes == 0 {
+                return Ok(num_read);
+            }
 
-                let chunk = slice::from_raw_parts(buff as *const u8, *read_bytes as usize);
-                drive_sfl(&mut s, chunk)?;
-                Ok(num_read)
-            })
+            let chunk = slice::from_raw_parts(buff as *const u8, *read_bytes as usize);
+            drive_sfl(&mut s, chunk)?;
+
+            Ok::<_,Error>(num_read)
         })
         .inspect_err(|e| error!(target: "our_p_read_file", "Failed to drive SFL FSM: {}", e))
         .unwrap_or(num_read)
 }
 
 fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<(), Error> {
+    fn redo_last_frame(s: &mut State, err: Resp) -> Result<(), Error> {
+        info!(target: "drive_sfl", "SFL Error: {}, resending current", err);
+        let frame = s.curr_frame.take().expect("a previous frame should've been saved before asking to redo a frame");
+        trace!("resend: {:X?}", frame);
+        inject_output(s, frame.as_bytes())?;
+        s.curr_frame = Some(frame);
+
+        Ok(())
+    }
+
     // todo!()
     match &mut s.activity {
         Activity::Inactive => {}
@@ -59,11 +69,13 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<(), Error> {
             s.matcher.reset();
             info!(target: "drive_sfl", "Found magic string.");
 
-            let mut loader = s
+            let filename = s
                 .filename
                 .as_ref()
-                .ok_or(Error::WasEmpty("filename"))
-                .and_then(|filename| File::open(filename).map_err(|e| Error::FileIoError(e)))
+                .expect("input filename should've been verified non-empty before Activity::LookForMagic");
+
+            let mut loader = File::open(filename)
+                .map_err(|e| Error::FileIoError(e))
                 .and_then(|fp| {
                     if fp.metadata().map_err(|e| Error::FileIoError(e))?.len() == 0 {
                         return Err(Error::FileIoError(io::Error::new(
@@ -80,7 +92,7 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<(), Error> {
             let frame = loader
                 .encode_data_frame(0)
                 .map_err(|e| Error::FileIoError(e))?
-                .unwrap();
+                .expect("input file should've been verified to be non-empty at this point");
             trace!("first: {:02X?}", frame);
             inject_output(s, frame.as_bytes())?;
             // Mutably borrowed twice???
@@ -100,13 +112,14 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<(), Error> {
             match Resp::try_from(chunk[0]).map_err(|_| Error::UnexpectedResponse(chunk[0]))? {
                 Resp::Success => {
                     s.last_frame_acked = s.last_frame_sent;
-                    let next_frame = s.last_frame_sent.unwrap();
+                    let next_frame = s.last_frame_sent.expect("s.last_frame_sent should have been initialized by Activity::LookForMagic");
 
-                    match s
+                    let loader = s
                         .sfl_loader
                         .as_mut()
-                        .unwrap()
-                        .encode_data_frame(next_frame)
+                        .expect("s.sfl_loader should have been initialized by Activity::LookForMagic");
+
+                    match loader.encode_data_frame(next_frame)
                         .map_err(|e| Error::FileIoError(e))?
                     {
                         Some(frame) => {
@@ -116,7 +129,7 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<(), Error> {
                             s.last_frame_sent = Some(next_frame + 1);
                         }
                         None => {
-                            let frame = s.sfl_loader.as_mut().unwrap().encode_boot_frame(s.addr);
+                            let frame = loader.encode_boot_frame(s.addr);
                             trace!("final: {:X?}", frame);
                             inject_output(s, frame.as_bytes())?;
                             s.curr_frame = Some(frame);
@@ -125,13 +138,7 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<(), Error> {
                     }
                 }
                 err @ (Resp::CrcError | Resp::Unknown | Resp::AckError) => {
-                    info!(target: "drive_sfl", "SFL Error: {}, resending current", err);
-                    let frame = s.curr_frame.take().unwrap();
-                    trace!("resend: {:X?}", frame);
-                    inject_output(s, frame.as_bytes())?;
-                    s.curr_frame = Some(frame);
-
-                    return Ok(());
+                    return redo_last_frame(s, err);
                 }
             }
         }
@@ -143,13 +150,7 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<(), Error> {
                     s.activity = Activity::LookForMagic;
                 }
                 err @ (Resp::CrcError | Resp::Unknown | Resp::AckError) => {
-                    info!(target: "drive_sfl", "SFL Error: {}, resending current", err);
-                    let frame = s.curr_frame.take().unwrap();
-                    trace!("resent_final: {:X?}", frame);
-                    inject_output(s, frame.as_bytes())?;
-                    s.curr_frame = Some(frame);
-
-                    return Ok(());
+                    return redo_last_frame(s, err);
                 }
             }
         }
@@ -214,24 +215,19 @@ pub unsafe extern "C" fn ttx_open_file(hooks: *mut tt::TTXFileHooks) {
     TTX_LITEX_STATE.with_borrow_mut(|s| {
         // SAFETY: Assumes TeraTerm passed us valid pointers.
         s.orig_readfile = *(*hooks).PReadFile;
-        // s.orig_writefile = *(*hooks).PWriteFile;
         *(*hooks).PReadFile = Some(our_p_read_file);
-        // *(*hooks).PWriteFile = Some(our_p_write_file);
 
         trace!(target: "TTXOpenFile", "s.orig_readfile <= {:?} ({:?})", &raw const s.orig_readfile, s.orig_readfile);
-        // trace!(target: "TTXOpenFile", "s.orig_writefile <= {:?} ({:?})", &raw const s.orig_writefile, s.orig_writefile);
         trace!(target: "TTXOpenFile", "*(*hooks).PReadFile <= {:?}", our_p_read_file as * const ());
-        // trace!(target: "TTXOpenFile", "*(*hooks).PWriteFile <= {:?}", our_p_write_file as * const ());
     });
 }
 
 pub unsafe extern "C" fn ttx_close_file(hooks: *mut tt::TTXFileHooks) {
     TTX_LITEX_STATE.with_borrow_mut(|s| {
-        // SAFETY: Assumes TeraTerm passed us valid pointers.
+        // SAFETY: Assumes TeraTerm passed us valid pointers, and that
+        // TeraTerm calls this function _after_ TTXOpenFile.
         *(*hooks).PReadFile = s.orig_readfile;
-        // *(*hooks).PWriteFile = s.orig_writefile;
 
         trace!(target: "TTXCloseFile", "*(*hooks).PReadFile <= {:?}", *(*hooks).PReadFile);
-        // trace!(target: "TTXCloseFile", "*(*hooks).PWriteFile <= {:?}", *(*hooks).PWriteFile);
     });
 }

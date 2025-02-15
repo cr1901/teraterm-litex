@@ -21,6 +21,7 @@ pub struct MagicMatcher {
 #[derive(IntoBytes, Immutable, Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum Cmd {
+    #[allow(unused)]
     Abort = 0,
     Load = 1,
     Jump = 2,
@@ -73,6 +74,7 @@ impl fmt::Display for Resp {
 pub struct SflLoader<R> {
     reader: R,
     base: u32,
+    #[allow(unused)]
     offs: usize,
     chunk_size: u16,
 }

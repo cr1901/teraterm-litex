@@ -13,7 +13,6 @@ use super::sfl::{self, Frame, MagicMatcher, SflLoader};
 use super::tt;
 
 use windows::Win32::Foundation::*;
-use windows::Win32::UI::WindowsAndMessaging::*;
 
 // SAFETY: Tera-Term is a mostly single-threaded application. AFAICT, plugins
 // also run in a single thread. This variable is inaccessible outside plugin
@@ -22,12 +21,10 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 unsafe impl Send for State {}
 
 pub struct State {
+    #[allow(unused)]
     pub ts: tt::PTTSet,
     pub cv: tt::PComVar,
     pub orig_readfile: tt::TReadFile,
-    pub orig_writefile: tt::TWriteFile,
-    pub file_menu: Option<HMENU>,
-    pub transfer_menu: Option<HMENU>,
     pub activity: Activity,
     pub matcher: MagicMatcher,
     pub sfl_loader: Option<SflLoader<File>>,
@@ -53,9 +50,6 @@ thread_local! {
         ts: ptr::null_mut(),
         cv: ptr::null_mut(),
         orig_readfile: None,
-        orig_writefile: None,
-        file_menu: None,
-        transfer_menu: None,
         activity: Activity::Inactive,
         matcher: MagicMatcher::new(sfl::MAGIC),
         sfl_loader: None,
