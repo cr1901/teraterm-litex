@@ -1,11 +1,14 @@
 /*! Serial Flash Loader implementation. */
 
+use core::panic;
+use std::fmt;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::mem::offset_of;
 use std::path::Path;
 
 use crc;
+use log::trace;
 use zerocopy::{byteorder::big_endian::U16, Immutable, IntoBytes};
 
 const CCITT: crc::Crc<u16> = crc::Crc::<u16>::new(&crc::CRC_16_XMODEM);
@@ -50,6 +53,17 @@ impl TryFrom<u8> for Resp {
     }
 }
 
+impl fmt::Display for Resp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Resp::Success => { write!(f, "Success") }
+            Resp::CrcError => { write!(f, "CRC Error") }
+            Resp::Unknown => { write!(f, "Unknown Error") }
+            Resp::AckError => { write!(f, "ACK Error") }
+        }
+    }
+}
+
 pub struct SflLoader<R> {
     reader: R,
     base: u32,
@@ -76,7 +90,7 @@ impl<R> SflLoader<R> {
         }
     }
 
-    pub fn encode_data_frame(&mut self, frame_num: u32) -> Result<Option<(usize, Box<Frame>)>, io::Error>
+    pub fn encode_data_frame(&mut self, frame_num: u32) -> Result<Option<Box<Frame>>, io::Error>
     where
         R: Read + Seek,
     {
@@ -93,6 +107,8 @@ impl<R> SflLoader<R> {
         frame.payload[0..4].copy_from_slice(&addr_be);
         frame.len = 4;
 
+        // XXX: This will seek past the end on last iteration. Works fine on
+        // Windows, but should probably be careful.
         self.reader.seek(SeekFrom::Start(
             (frame_num * (self.chunk_size as u32)).into(),
         ))?;
@@ -104,14 +120,13 @@ impl<R> SflLoader<R> {
         }
         frame.len += read_len as u8;
 
-        let crc = CCITT
-            .checksum(&frame.as_bytes()[offset_of!(Frame, cmd)..((read_len + 4 + 4) as usize)]);
+        let crc = CCITT.checksum(&frame.as_bytes()[offset_of!(Frame, cmd)..]);
         frame.crc = crc.into();
 
-        Ok(Some(((read_len + 4 + 4) as usize, frame)))
+        Ok(Some(frame))
     }
 
-    pub fn encode_boot_frame(&mut self, address: u32) -> (usize, Box<Frame>) {
+    pub fn encode_boot_frame(&mut self, address: u32) -> Box<Frame> {
         let mut frame = Box::new(Frame {
             len: 0,
             crc: 0.into(),
@@ -123,10 +138,10 @@ impl<R> SflLoader<R> {
         frame.payload[0..4].copy_from_slice(&addr_be);
         frame.len = 4;
 
-        let crc = CCITT.checksum(&frame.as_bytes()[offset_of!(Frame, cmd)..(4 + 4)]);
+        let crc = CCITT.checksum(&frame.as_bytes()[offset_of!(Frame, cmd)..]);
         frame.crc = crc.into();
 
-        (4 + 4, frame)
+        frame
     }
 }
 
@@ -138,6 +153,12 @@ pub struct Frame {
     crc: U16,
     cmd: Cmd,
     payload: [u8; 255],
+}
+
+impl Frame {
+    pub fn as_bytes(&self) -> &[u8] {
+        &IntoBytes::as_bytes(self)[..(((self.len as usize) + 4) as usize)]
+    }
 }
 
 impl MagicMatcher {

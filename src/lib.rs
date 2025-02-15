@@ -119,6 +119,7 @@ unsafe extern "C" fn ttx_init(ts: tt::PTTSet, cv: tt::PComVar) {
             last_frame_sent: None,
             filename,
             addr,
+            curr_frame: None
     });
 }
 

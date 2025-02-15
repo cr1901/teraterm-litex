@@ -139,23 +139,18 @@ pub unsafe extern "system" fn litex_setup_dialog(
 
                 // FIXME: Error paths still need some tuning...
                 match (kernel_path, boot_addr, active) {
-                    (Ok(path), Ok(addr), true) => match SflLoader::open(path.clone(), addr) {
-                        Ok(loader) => {
-                            TTX_LITEX_STATE.with_borrow_mut(|s| {
-                                s.filename = Some(path);
-                                s.addr = addr;
-                                s.sfl_loader = Some(loader);
-                                s.matcher.reset();
-                                s.activity = Activity::LookForMagic;
-                                s.last_frame_acked = None;
-                                s.last_frame_sent = None;
-                            });
+                    (Ok(path), Ok(addr), true) => {
+                        TTX_LITEX_STATE.with_borrow_mut(|s| {
+                            s.filename = Some(path);
+                            s.addr = addr;
+                            // s.sfl_loader = Some(loader);
+                            s.matcher.reset();
+                            s.activity = Activity::LookForMagic;
+                            s.last_frame_acked = None;
+                            s.last_frame_sent = None;
+                        });
 
-                            info!(target: "setup_dialog", "Plugin now actively searching for magic string.");
-                        }
-                        Err(e) => {
-                            error!(target: "setup_dialog", "Could not open file: {}", e);
-                        }
+                        info!(target: "setup_dialog", "Plugin now actively searching for magic string.");
                     },
                     (kernel_path, addr, _) => {
                         if let Err(e) = kernel_path.as_ref() {

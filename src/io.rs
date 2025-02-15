@@ -2,83 +2,18 @@
 
 use core::slice;
 use std::ffi::c_void;
+use std::fs::File;
 use std::{io, ptr};
 
-use super::sfl::{Resp, MAGIC_RESPONSE};
-use super::state::{TTX_LITEX_STATE, Activity, State};
+use crate::sfl::SflLoader;
+
+use super::sfl::{Frame, Resp, MAGIC_RESPONSE};
+use super::state::{Activity, State, TTX_LITEX_STATE};
 use super::tt;
 use super::Error;
 use log::*;
 
 use windows::Win32::System::IO::OVERLAPPED;
-use zerocopy::IntoBytes;
-
-/* #[allow(unused)]
-unsafe extern "C" fn our_p_write_file(
-    fh: *mut c_void,
-    buff: *const c_void,
-    len: u32,
-    written_bytes: *mut u32,
-    wol: *mut OVERLAPPED,
-) -> i32 {
-    trace!(target: "our_p_write_file", "Entered");
-
-    match with_state_var(|s| {
-        match (
-            &mut s.activity,
-            s.last_frame_sent,
-            s.last_frame_acked,
-            s.sfl_loader.as_mut(),
-        ) {
-            (Activity::WriteAndWait, None, None, Some(loader)) => {
-                let buf = slice::from_raw_parts(buff as *const u8, len as usize);
-
-                if let Err(e) = loader
-                    .encode_data_frame(0)
-                    .map_err(|e| Error::FileIoError(e))
-                    .and_then(|(len, frame)| {
-                        trace!(target: "our_p_write_file", "Injecting packet: {:#X?}", &frame.as_bytes()[..len]);
-                        inject_output(s, &frame.as_bytes()[..len])?;
-                        s.last_frame_sent = Some(0);
-
-                        Ok(())
-                    }) {
-                        error!("Could not send packet 0: {}", e);
-                    }
-            }
-            (Activity::WriteAndWait, Some(sent), Some(acked), Some(loader)) if sent == acked => {
-                if let Err(e) = loader
-                    .encode_data_frame(sent)
-                    .map_err(|e| Error::FileIoError(e))
-                    .and_then(|(len, frame)| {
-                        inject_output(s, &frame.as_bytes()[..len])?;
-                        s.last_frame_sent = Some(sent + 1);
-
-                        Ok(())
-                    })
-                {
-                    error!("Could not send packet {}: {}", sent, e);
-                }
-            }
-            _ => {}
-        }
-
-        if let Some(write_file) = s.orig_writefile {
-            return Ok(write_file);
-        } else {
-            return Err(Error::WasEmpty("PWriteFile"));
-        }
-    }) {
-        Ok(wf) => {
-            trace!(target: "our_p_write_file", "Running original PWriteFile at {:?}.", wf);
-            return wf(fh, buff, len, written_bytes, wol);
-        }
-        Err(e) => {
-            error!(target: "our_p_write_file", "Could not call original PWriteFile: {}", e);
-            return 0;
-        }
-    }
-} */
 
 #[allow(unused)]
 unsafe extern "C" fn our_p_read_file(
@@ -91,8 +26,9 @@ unsafe extern "C" fn our_p_read_file(
     trace!(target: "our_p_read_file", "Entered");
 
     let mut num_read = 0;
-    TTX_LITEX_STATE.with_borrow_mut(|mut s| {
-        s.orig_readfile
+    TTX_LITEX_STATE
+        .with_borrow_mut(|mut s| {
+            s.orig_readfile
             .ok_or(Error::WasEmpty("PReadFile"))
             .and_then(|read_file| {
                 trace!(target: "our_p_read_file", "Running original PReadFile at {:?}.", read_file);
@@ -106,102 +42,113 @@ unsafe extern "C" fn our_p_read_file(
                 drive_sfl(&mut s, chunk)?;
                 Ok(num_read)
             })
-    })
-    .inspect_err(|e| error!(target: "our_p_read_file", "Failed to drive SFL FSM: {}", e))
-    .unwrap_or(num_read)
+        })
+        .inspect_err(|e| error!(target: "our_p_read_file", "Failed to drive SFL FSM: {}", e))
+        .unwrap_or(num_read)
 }
 
 fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<(), Error> {
     // todo!()
     match &mut s.activity {
-        Activity::Inactive => {},
+        Activity::Inactive => {}
         Activity::LookForMagic => {
-            if s.matcher.look_for_match(chunk) {
-                s.matcher.reset();
-                info!(target: "drive_sfl", "Found magic string.");
-
-                return inject_output(s, &MAGIC_RESPONSE)
-                    // .inspect_err(|e| error!("Could not inject magic response: {}", e))
-                    .and_then(|_| {
-                        let (used, frame) = s
-                            .sfl_loader
-                            .as_mut()
-                            .ok_or(Error::WasEmpty("loader"))?
-                            .encode_data_frame(0)
-                            .map_err(|e| Error::FileIoError(e))?
-                            .ok_or(Error::FileIoError(io::Error::new(
-                                io::ErrorKind::UnexpectedEof,
-                                "input file was empty",
-                            )))?;
-                        trace!("{:X?}", frame);
-                        inject_output(s, &frame.as_bytes()[..used])?;
-
-                        s.last_frame_sent = Some(0);
-                        s.activity = Activity::WaitResp;
-
-                        Ok(())
-                    });
-                // .inspect_err(|e| error!("Could not write initial packet: {}", e));
-            } else {
-                return Ok(());
+            if !s.matcher.look_for_match(chunk) {
+                return Ok(())
             }
+
+            s.matcher.reset();
+            info!(target: "drive_sfl", "Found magic string.");
+
+            let mut loader = s
+                .filename
+                .as_ref()
+                .ok_or(Error::WasEmpty("filename"))
+                .and_then(|filename| File::open(filename).map_err(|e| Error::FileIoError(e)))
+                .and_then(|fp| {
+                    if fp.metadata().map_err(|e| Error::FileIoError(e))?.len() == 0 {
+                        return Err(Error::FileIoError(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "input file was empty",
+                        )));
+                    } else {
+                        Ok(fp)
+                    }
+                })
+                .map(|fp| SflLoader::new(fp, s.addr))?;
+
+            inject_output(s, &MAGIC_RESPONSE)?;
+            let frame = loader
+                .encode_data_frame(0)
+                .map_err(|e| Error::FileIoError(e))?.unwrap();
+            trace!("first: {:02X?}", frame);
+            inject_output(s, frame.as_bytes())?;
+            // Mutably borrowed twice???
+            // fn next_data_frame(s: &mut State) -> Result<Option<Box<Frame>>, Error> {
+            //     todo!()
+            // }
+            // inject_output(s, next_data_frame(s)?.unwrap().as_bytes())?;
+
+            s.sfl_loader = Some(loader);
+            s.activity = Activity::WaitResp;
+            s.curr_frame = Some(frame);
+            s.last_frame_sent = Some(0);
+
+            return Ok(());
         }
         Activity::WaitResp => {
             match Resp::try_from(chunk[0]).map_err(|_| Error::UnexpectedResponse(chunk[0]))? {
                 Resp::Success => {
-                    s.last_frame_acked = Some(s.last_frame_acked.map_or(0, |ack| ack + 1));
+                    s.last_frame_acked = s.last_frame_sent;
+                    let next_frame = s.last_frame_sent.unwrap();
 
-                    let loader = s.sfl_loader.as_mut().ok_or(Error::WasEmpty("loader"))?;
-
-                    let next_frame = s.last_frame_sent.map_or(0, |sent| sent + 1);
-                    if let Some((used, frame)) = loader.encode_data_frame(next_frame).map_err(|e| Error::FileIoError(e))? {
-                        trace!("{:X?}", frame);
-                        inject_output(s, &frame.as_bytes()[..used])?;
-                        s.last_frame_sent = Some(next_frame);
-                    } else {
-                        let (used, frame) = loader.encode_boot_frame(s.addr);
-                        inject_output(s, &frame.as_bytes()[..used])?;
-                        s.activity = Activity::WaitFinalResp;
+                    match s
+                        .sfl_loader
+                        .as_mut()
+                        .unwrap()
+                        .encode_data_frame(next_frame)
+                        .map_err(|e| Error::FileIoError(e))?
+                    {
+                        Some(frame) => {
+                            trace!("next: {:X?}", frame);
+                            inject_output(s, frame.as_bytes())?;
+                            s.curr_frame = Some(frame);
+                            s.last_frame_sent = Some(next_frame + 1);
+                        },
+                        None => {
+                            let frame = s.sfl_loader.as_mut().unwrap().encode_boot_frame(s.addr);
+                            trace!("final: {:X?}", frame);
+                            inject_output(s, frame.as_bytes())?;
+                            s.curr_frame = Some(frame);
+                            s.activity = Activity::WaitFinalResp;
+                        }
                     }
-                    // if let Some((used, frame)) =
-                    //     .encode_data_frame(0)
-                    //     .map_err(|e| Error::FileIoError(e))?
-                    // {
-                    //     inject_output(s, &frame.as_bytes()[..used])?;
-                    //     s.last_frame_sent = Some(s.last_frame_sent.map_or(0, |sent| sent + 1));
-                    // } else {
+                },
+                err @ (Resp::CrcError | Resp::Unknown | Resp::AckError) => {
+                    info!(target: "drive_sfl", "SFL Error: {}, resending current", err);
+                    let frame = s.curr_frame.take().unwrap();
+                    trace!("resend: {:X?}", frame);
+                    inject_output(s, frame.as_bytes())?;
+                    s.curr_frame = Some(frame);
 
-                    // }
-                }
-                Resp::CrcError | Resp::Unknown | Resp::AckError => {
-                    // frame_no = Some(s.last_frame_acked.map_or(0, |ack| ack + 1));
-                    // info!(target: "drive_sfl", "CRC Error.");
-                    // let (used, frame) = s
-                    //         .sfl_loader
-                    //         .as_mut()
-                    //         .ok_or(Error::WasEmpty("loader"))?
-                    //         .encode_data_frame(0)
-                    //         .map_err(|e| Error::FileIoError(e))?
-                    //         .ok_or(Error::FileIoError(io::Error::new(
-                    //             io::ErrorKind::UnexpectedEof,
-                    //             "input file was empty",
-                    //         )))?;
-                    // inject_output(s, &frame.as_bytes()[..used])?;
+                    return Ok(())
                 }
             }
-            // .inspect_err(|e| error!("Could not inject magic response: {}", e));
-
-            /* Only check the initial frame so we know whether we  */
-        },
+        }
         Activity::WaitFinalResp => {
             match Resp::try_from(chunk[0]).map_err(|_| Error::UnexpectedResponse(chunk[0]))? {
                 Resp::Success => {
                     s.last_frame_acked = None;
                     s.last_frame_sent = None;
                     s.activity = Activity::LookForMagic;
-                }
-                Resp::CrcError | Resp::Unknown | Resp::AckError => {
+                },
+                err @ (Resp::CrcError | Resp::Unknown | Resp::AckError) => {
+                    info!(target: "drive_sfl", "SFL Error: {}, resending current", err);
+                    let frame = s.curr_frame.take().unwrap();
+                    trace!("resent_final: {:X?}", frame);
+                    inject_output(s, frame.as_bytes())?;
+                    s.curr_frame = Some(frame);
 
+                    return Ok(())
                 }
             }
         }

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use std::ptr;
 
-use super::sfl::{self, MagicMatcher, SflLoader};
+use super::sfl::{self, MagicMatcher, SflLoader, Frame};
 use super::tt;
 use super::Error;
 
@@ -36,6 +36,7 @@ pub struct State {
     pub last_frame_acked: Option<u32>,
     pub filename: Option<PathBuf>,
     pub addr: u32,
+    pub curr_frame: Option<Box<Frame>>
 }
 
 #[derive(PartialEq)]
@@ -63,5 +64,6 @@ thread_local! {
         last_frame_sent: None,
         filename: None,
         addr: 0x40000000,
+        curr_frame: None
     });
 }
