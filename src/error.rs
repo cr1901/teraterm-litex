@@ -45,9 +45,13 @@ impl fmt::Display for Error {
                     "Could not intepret address as a decimal or hex integer: {}",
                     a
                 )
-            },
+            }
             Error::UnexpectedResponse(r) => {
-                write!(f, "Received an invalid response char: {} ({})", r, *r as char)
+                write!(
+                    f,
+                    "Received an invalid response char: {} ({})",
+                    r, *r as char
+                )
             }
         }
     }

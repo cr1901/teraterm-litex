@@ -9,9 +9,8 @@ use std::path::PathBuf;
 
 use std::ptr;
 
-use super::sfl::{self, MagicMatcher, SflLoader, Frame};
+use super::sfl::{self, Frame, MagicMatcher, SflLoader};
 use super::tt;
-use super::Error;
 
 use windows::Win32::Foundation::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -36,7 +35,7 @@ pub struct State {
     pub last_frame_acked: Option<u32>,
     pub filename: Option<PathBuf>,
     pub addr: u32,
-    pub curr_frame: Option<Box<Frame>>
+    pub curr_frame: Option<Box<Frame>>,
 }
 
 #[derive(PartialEq)]

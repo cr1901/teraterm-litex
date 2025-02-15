@@ -106,20 +106,20 @@ unsafe extern "C" fn ttx_init(ts: tt::PTTSet, cv: tt::PComVar) {
     }
 
     TTX_LITEX_STATE.set(State {
-            ts,
-            cv,
-            orig_readfile: None,
-            orig_writefile: None,
-            file_menu: None,
-            transfer_menu: None,
-            activity,
-            matcher: MagicMatcher::new(sfl::MAGIC),
-            sfl_loader,
-            last_frame_acked: None,
-            last_frame_sent: None,
-            filename,
-            addr,
-            curr_frame: None
+        ts,
+        cv,
+        orig_readfile: None,
+        orig_writefile: None,
+        file_menu: None,
+        transfer_menu: None,
+        activity,
+        matcher: MagicMatcher::new(sfl::MAGIC),
+        sfl_loader,
+        last_frame_acked: None,
+        last_frame_sent: None,
+        filename,
+        addr,
+        curr_frame: None,
     });
 }
 

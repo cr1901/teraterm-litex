@@ -8,8 +8,7 @@ use std::path::PathBuf;
 use log::*;
 use rfd::FileDialog;
 
-use super::sfl::SflLoader;
-use super::state::{OUR_HINST, TTX_LITEX_STATE, Activity};
+use super::state::{Activity, OUR_HINST, TTX_LITEX_STATE};
 use super::tt;
 use super::Error;
 
@@ -66,9 +65,8 @@ pub unsafe extern "system" fn litex_setup_dialog(
             // * SetWindowLongPtr to avoid with_state_var (Dialog is modal).
 
             // Restore existing values.
-            let (maybe_file, addr, active) = TTX_LITEX_STATE.with_borrow(|s| {
-                (s.filename.clone(), s.addr, s.activity != Activity::Inactive)
-            });
+            let (maybe_file, addr, active) = TTX_LITEX_STATE
+                .with_borrow(|s| (s.filename.clone(), s.addr, s.activity != Activity::Inactive));
 
             if let Some(file) = maybe_file {
                 let mut file_vec: Vec<u16> = file.as_os_str().encode_wide().collect();
@@ -151,7 +149,7 @@ pub unsafe extern "system" fn litex_setup_dialog(
                         });
 
                         info!(target: "setup_dialog", "Plugin now actively searching for magic string.");
-                    },
+                    }
                     (kernel_path, addr, _) => {
                         if let Err(e) = kernel_path.as_ref() {
                             error!(target: "setup_dialog", "Bad filename: {}", e);
@@ -213,7 +211,8 @@ pub unsafe extern "C" fn ttx_modify_menu(menu: HMENU) {
             MF_ENABLED | MF_STRING,
             ID_MENU_LITEX,
             PCWSTR(u16cstr!("LiteX").as_ptr()),
-        ).map_err(|e| Error::WinError(e))
+        )
+        .map_err(|e| Error::WinError(e))
     }) {
         debug!(target: "TTXModifyMenu", "Could not modify menu: {}", e);
     }

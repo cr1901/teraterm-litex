@@ -7,7 +7,7 @@ use std::{io, ptr};
 
 use crate::sfl::SflLoader;
 
-use super::sfl::{Frame, Resp, MAGIC_RESPONSE};
+use super::sfl::{Resp, MAGIC_RESPONSE};
 use super::state::{Activity, State, TTX_LITEX_STATE};
 use super::tt;
 use super::Error;
@@ -53,7 +53,7 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<(), Error> {
         Activity::Inactive => {}
         Activity::LookForMagic => {
             if !s.matcher.look_for_match(chunk) {
-                return Ok(())
+                return Ok(());
             }
 
             s.matcher.reset();
@@ -79,7 +79,8 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<(), Error> {
             inject_output(s, &MAGIC_RESPONSE)?;
             let frame = loader
                 .encode_data_frame(0)
-                .map_err(|e| Error::FileIoError(e))?.unwrap();
+                .map_err(|e| Error::FileIoError(e))?
+                .unwrap();
             trace!("first: {:02X?}", frame);
             inject_output(s, frame.as_bytes())?;
             // Mutably borrowed twice???
@@ -113,7 +114,7 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<(), Error> {
                             inject_output(s, frame.as_bytes())?;
                             s.curr_frame = Some(frame);
                             s.last_frame_sent = Some(next_frame + 1);
-                        },
+                        }
                         None => {
                             let frame = s.sfl_loader.as_mut().unwrap().encode_boot_frame(s.addr);
                             trace!("final: {:X?}", frame);
@@ -122,7 +123,7 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<(), Error> {
                             s.activity = Activity::WaitFinalResp;
                         }
                     }
-                },
+                }
                 err @ (Resp::CrcError | Resp::Unknown | Resp::AckError) => {
                     info!(target: "drive_sfl", "SFL Error: {}, resending current", err);
                     let frame = s.curr_frame.take().unwrap();
@@ -130,7 +131,7 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<(), Error> {
                     inject_output(s, frame.as_bytes())?;
                     s.curr_frame = Some(frame);
 
-                    return Ok(())
+                    return Ok(());
                 }
             }
         }
@@ -140,7 +141,7 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<(), Error> {
                     s.last_frame_acked = None;
                     s.last_frame_sent = None;
                     s.activity = Activity::LookForMagic;
-                },
+                }
                 err @ (Resp::CrcError | Resp::Unknown | Resp::AckError) => {
                     info!(target: "drive_sfl", "SFL Error: {}, resending current", err);
                     let frame = s.curr_frame.take().unwrap();
@@ -148,7 +149,7 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<(), Error> {
                     inject_output(s, frame.as_bytes())?;
                     s.curr_frame = Some(frame);
 
-                    return Ok(())
+                    return Ok(());
                 }
             }
         }

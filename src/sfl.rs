@@ -1,6 +1,5 @@
 /*! Serial Flash Loader implementation. */
 
-use core::panic;
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -8,7 +7,6 @@ use std::mem::offset_of;
 use std::path::Path;
 
 use crc;
-use log::trace;
 use zerocopy::{byteorder::big_endian::U16, Immutable, IntoBytes};
 
 const CCITT: crc::Crc<u16> = crc::Crc::<u16>::new(&crc::CRC_16_XMODEM);
@@ -56,10 +54,18 @@ impl TryFrom<u8> for Resp {
 impl fmt::Display for Resp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Resp::Success => { write!(f, "Success") }
-            Resp::CrcError => { write!(f, "CRC Error") }
-            Resp::Unknown => { write!(f, "Unknown Error") }
-            Resp::AckError => { write!(f, "ACK Error") }
+            Resp::Success => {
+                write!(f, "Success")
+            }
+            Resp::CrcError => {
+                write!(f, "CRC Error")
+            }
+            Resp::Unknown => {
+                write!(f, "Unknown Error")
+            }
+            Resp::AckError => {
+                write!(f, "ACK Error")
+            }
         }
     }
 }
