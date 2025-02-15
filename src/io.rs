@@ -20,7 +20,7 @@ enum ReadAction {
     Swallow,
     Replace(String),
     Append(String),
-    Prepend(String)
+    Prepend(String),
 }
 
 #[allow(unused)]
@@ -55,17 +55,21 @@ unsafe extern "C" fn our_p_read_file(
             // screen as the return value of our hook.
             let chunk = slice::from_raw_parts(buff as *const u8, *read_bytes as usize);
             match drive_sfl(&mut s, chunk)? {
-                ReadAction::PassThru => {},
+                ReadAction::PassThru => {}
                 ReadAction::Swallow => {
                     *read_bytes = 0;
-                },
+                }
                 ReadAction::Replace(s) => {
                     ptr::copy_nonoverlapping(s.as_ptr(), buff as *mut u8, s.len());
                     *read_bytes = s.len() as u32;
-                },
+                }
                 ReadAction::Append(s) => {
                     if (len - *read_bytes) >= (s.len() as u32) {
-                        ptr::copy_nonoverlapping(s.as_ptr(), buff.offset(*read_bytes as isize) as *mut u8, s.len());
+                        ptr::copy_nonoverlapping(
+                            s.as_ptr(),
+                            buff.offset(*read_bytes as isize) as *mut u8,
+                            s.len(),
+                        );
                         *read_bytes += s.len() as u32;
                     }
                 }
@@ -82,7 +86,7 @@ unsafe extern "C" fn our_p_read_file(
                 }
             }
 
-            Ok::<_,Error>(rf_ret)
+            Ok::<_, Error>(rf_ret)
         })
         .inspect_err(|e| error!(target: "our_p_read_file", "Failed to drive SFL FSM: {}", e))
         .unwrap_or(rf_ret)
@@ -91,7 +95,10 @@ unsafe extern "C" fn our_p_read_file(
 fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<ReadAction, Error> {
     fn redo_last_frame(s: &mut State, err: Resp) -> Result<(), Error> {
         info!(target: "drive_sfl", "SFL Error: {}, resending current", err);
-        let frame = s.curr_frame.take().expect("a previous frame should've been saved before asking to redo a frame");
+        let frame = s
+            .curr_frame
+            .take()
+            .expect("a previous frame should've been saved before asking to redo a frame");
         trace!("resend: {:X?}", frame);
         inject_output(s, frame.as_bytes())?;
         s.curr_frame = Some(frame);
@@ -100,7 +107,7 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<ReadAction, Error> {
     }
 
     match &mut s.activity {
-        Activity::Inactive => { Ok(ReadAction::PassThru) }
+        Activity::Inactive => Ok(ReadAction::PassThru),
         Activity::LookForMagic => {
             if !s.matcher.look_for_match(chunk) {
                 return Ok(ReadAction::PassThru);
@@ -109,10 +116,9 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<ReadAction, Error> {
             s.matcher.reset();
             info!(target: "drive_sfl", "Found magic string.");
 
-            let filename = s
-                .filename
-                .as_ref()
-                .expect("input filename should've been verified non-empty before Activity::LookForMagic");
+            let filename = s.filename.as_ref().expect(
+                "input filename should've been verified non-empty before Activity::LookForMagic",
+            );
 
             let mut loader = File::open(filename)
                 .map_err(|e| Error::FileIoError(e))
@@ -146,20 +152,24 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<ReadAction, Error> {
             s.curr_frame = Some(frame);
             s.last_frame_sent = Some(0);
 
-            Ok(ReadAction::Append("\r\x1B[0;36m[TTXLiteX] Uploading File\x1B[0m ".to_string()))
+            Ok(ReadAction::Append(
+                "\r\x1B[0;36m[TTXLiteX] Uploading File\x1B[0m ".to_string(),
+            ))
         }
         Activity::WaitResp => {
             match Resp::try_from(chunk[0]).map_err(|_| Error::UnexpectedResponse(chunk[0]))? {
                 Resp::Success => {
                     s.last_frame_acked = s.last_frame_sent;
-                    let next_frame = s.last_frame_sent.expect("s.last_frame_sent should have been initialized by Activity::LookForMagic");
+                    let next_frame = s.last_frame_sent.expect(
+                        "s.last_frame_sent should have been initialized by Activity::LookForMagic",
+                    );
 
-                    let loader = s
-                        .sfl_loader
-                        .as_mut()
-                        .expect("s.sfl_loader should have been initialized by Activity::LookForMagic");
+                    let loader = s.sfl_loader.as_mut().expect(
+                        "s.sfl_loader should have been initialized by Activity::LookForMagic",
+                    );
 
-                    match loader.encode_data_frame(next_frame)
+                    match loader
+                        .encode_data_frame(next_frame)
                         .map_err(|e| Error::FileIoError(e))?
                     {
                         Some(frame) => {
@@ -191,7 +201,9 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<ReadAction, Error> {
                     s.last_frame_sent = None;
                     s.activity = Activity::LookForMagic;
 
-                    Ok(ReadAction::Prepend("\r\n\x1B[0;36m[TTXLiteX] Done!\x1B[0m\r\n\r\n".to_string()))
+                    Ok(ReadAction::Prepend(
+                        "\r\n\x1B[0;36m[TTXLiteX] Done!\x1B[0m\r\n\r\n".to_string(),
+                    ))
                 }
                 err @ (Resp::CrcError | Resp::Unknown | Resp::AckError) => {
                     redo_last_frame(s, err).map(|_| ReadAction::Swallow)
