@@ -41,28 +41,26 @@ const TTX_EXPORTS: tt::TTXExports = tt::TTXExports {
     TTXCloseFile: Some(io::ttx_close_file),
 };
 
-ttx_export! {
-    #[no_mangle]
-    #[export_name = "TTXBind"]
-    unsafe fn ttx_bind(_version: tt::WORD, exports: *mut tt::TTXExports) -> bool {
-        // SAFETY: Assumes that TeraTerm gave us a proper struct.
-        (&raw mut (*exports).loadOrder).write(TTX_EXPORTS.loadOrder);
-        (&raw mut (*exports).TTXInit).write(TTX_EXPORTS.TTXInit);
-        (&raw mut (*exports).TTXGetUIHooks).write(TTX_EXPORTS.TTXGetUIHooks);
-        (&raw mut (*exports).TTXGetSetupHooks).write(TTX_EXPORTS.TTXGetSetupHooks);
-        (&raw mut (*exports).TTXOpenTCP).write(TTX_EXPORTS.TTXOpenTCP);
-        (&raw mut (*exports).TTXCloseTCP).write(TTX_EXPORTS.TTXCloseTCP);
-        (&raw mut (*exports).TTXSetWinSize).write(TTX_EXPORTS.TTXSetWinSize);
-        (&raw mut (*exports).TTXModifyMenu).write(TTX_EXPORTS.TTXModifyMenu);
-        (&raw mut (*exports).TTXModifyPopupMenu).write(TTX_EXPORTS.TTXModifyPopupMenu);
-        (&raw mut (*exports).TTXProcessCommand).write(TTX_EXPORTS.TTXProcessCommand);
-        (&raw mut (*exports).TTXEnd).write(TTX_EXPORTS.TTXEnd);
-        (&raw mut (*exports).TTXSetCommandLine).write(TTX_EXPORTS.TTXSetCommandLine);
-        (&raw mut (*exports).TTXOpenFile).write(TTX_EXPORTS.TTXOpenFile);
-        (&raw mut (*exports).TTXCloseFile).write(TTX_EXPORTS.TTXCloseFile);
+#[no_mangle]
+#[export_name = "TTXBind"]
+unsafe extern "system" fn ttx_bind(_version: tt::WORD, exports: *mut tt::TTXExports) -> bool {
+    // SAFETY: Assumes that TeraTerm gave us a proper struct.
+    (&raw mut (*exports).loadOrder).write(TTX_EXPORTS.loadOrder);
+    (&raw mut (*exports).TTXInit).write(TTX_EXPORTS.TTXInit);
+    (&raw mut (*exports).TTXGetUIHooks).write(TTX_EXPORTS.TTXGetUIHooks);
+    (&raw mut (*exports).TTXGetSetupHooks).write(TTX_EXPORTS.TTXGetSetupHooks);
+    (&raw mut (*exports).TTXOpenTCP).write(TTX_EXPORTS.TTXOpenTCP);
+    (&raw mut (*exports).TTXCloseTCP).write(TTX_EXPORTS.TTXCloseTCP);
+    (&raw mut (*exports).TTXSetWinSize).write(TTX_EXPORTS.TTXSetWinSize);
+    (&raw mut (*exports).TTXModifyMenu).write(TTX_EXPORTS.TTXModifyMenu);
+    (&raw mut (*exports).TTXModifyPopupMenu).write(TTX_EXPORTS.TTXModifyPopupMenu);
+    (&raw mut (*exports).TTXProcessCommand).write(TTX_EXPORTS.TTXProcessCommand);
+    (&raw mut (*exports).TTXEnd).write(TTX_EXPORTS.TTXEnd);
+    (&raw mut (*exports).TTXSetCommandLine).write(TTX_EXPORTS.TTXSetCommandLine);
+    (&raw mut (*exports).TTXOpenFile).write(TTX_EXPORTS.TTXOpenFile);
+    (&raw mut (*exports).TTXCloseFile).write(TTX_EXPORTS.TTXCloseFile);
 
-        true
-    }
+    true
 }
 
 ttx_export! {
@@ -123,10 +121,9 @@ ttx_export! {
     }
 }
 
-// extern "C" only works for GNU ABI, "stdcall" works for both.
 #[no_mangle]
 #[allow(non_snake_case, unused_variables)]
-extern "stdcall" fn DllMain(dll_module: HINSTANCE, call_reason: u32, _: *mut ()) -> bool {
+extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: u32, _: *mut ()) -> bool {
     match call_reason {
         DLL_PROCESS_ATTACH => {
             let _ = OUR_HINST.set(dll_module);

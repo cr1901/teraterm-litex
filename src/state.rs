@@ -1,7 +1,11 @@
-/*! Statically-scoped variables.
+/*! Thread-local-scoped variables.
 
 These unfortunately have to exist as a side-effect of being a DLL plugin that
-has no way to pass variables in from top. This includes our DLLMain. */
+has no way to pass variables in from top. This includes our DLLMain.
+
+Fortunately, Tera-Term is a mostly single-threaded application. AFAICT, plugins
+also run in a single thread. So we can use the thread_local macro.
+*/
 
 use std::cell::{Cell, RefCell};
 use std::fs::File;
@@ -13,12 +17,6 @@ use super::sfl::{self, Frame, MagicMatcher, SflLoader};
 use super::tt;
 
 use windows::Win32::Foundation::*;
-
-// SAFETY: Tera-Term is a mostly single-threaded application. AFAICT, plugins
-// also run in a single thread. This variable is inaccessible outside plugin
-// context and is only accessed via Mutex. Therefore it is accessed only
-// by a single thread.
-// unsafe impl Send for State {}
 
 pub struct State {
     #[allow(unused)]

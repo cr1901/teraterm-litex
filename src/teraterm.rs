@@ -1,3 +1,5 @@
+/*! Wrapper module for TeraTerm bindings. */
+
 #[cfg(all(target_env = "msvc", target_pointer_width="32"))]
 pub mod msvc_32;
 #[cfg(all(target_env = "gnu", target_pointer_width="64"))]
@@ -7,6 +9,13 @@ pub mod gnu_64;
 pub use msvc_32::*;
 #[cfg(all(target_env = "gnu", target_pointer_width="64"))]
 pub use gnu_64::*;
+
+/* ttx_export exists because bindgen chooses different calling conventions
+   on MSVC vs. GNU ABI. Transparently choose one or the other using a "simple"
+   macro (that still took me an hour to get right :(...).
+
+   If bindgen chose "extern "system"" for both sets of bindings, then this
+   macro wouldn't be needed. */
 
 #[cfg(target_env = "msvc")]
 #[macro_export]
