@@ -23,73 +23,75 @@ enum ReadAction {
     Prepend(String),
 }
 
-#[allow(unused)]
-unsafe extern "C" fn our_p_read_file(
-    fh: *mut c_void,
-    buff: *mut c_void,
-    len: u32,
-    read_bytes: *mut u32,
-    wol: *mut OVERLAPPED,
-) -> i32 {
-    trace!(target: "our_p_read_file", "Entered");
+ttx_export! {
+    #[allow(unused)]
+    unsafe fn our_p_read_file(
+        fh: *mut c_void,
+        buff: *mut c_void,
+        len: u32,
+        read_bytes: *mut u32,
+        wol: *mut OVERLAPPED,
+    ) -> i32 {
+        trace!(target: "our_p_read_file", "Entered");
 
-    let mut rf_ret = 0;
-    TTX_LITEX_STATE
-        .with_borrow_mut(|mut s| {
-            let read_file = s
-                .orig_readfile
-                .expect("PReadFile should've been set by TTXOpenFile");
-            trace!(target: "our_p_read_file", "Running original PReadFile at {:?}.", read_file);
-            rf_ret = read_file(fh, buff, len, read_bytes, wol);
+        let mut rf_ret = 0;
+        TTX_LITEX_STATE
+            .with_borrow_mut(|mut s| {
+                let read_file = s
+                    .orig_readfile
+                    .expect("PReadFile should've been set by TTXOpenFile");
+                trace!(target: "our_p_read_file", "Running original PReadFile at {:?}.", read_file);
+                rf_ret = read_file(fh, buff, len, read_bytes, wol);
 
-            if *read_bytes == 0 {
-                return Ok(rf_ret);
-            }
-
-            // Not that InBuff is NOT circular either; ptr is "next value to be read",
-            // and cnt is "num of values left to read". On entry, "CommReceive", which
-            // is the immediate parent function of PReadFile, will move the unread part
-            // of InBuff to offset 0 and set InPtr to 0 (See "Compact buffer" comment).
-            // Trying to interfere with this by writing InBuff directly messes out
-            // terminal output, so we inject anything we want to write to the
-            // screen as the return value of our hook.
-            let chunk = slice::from_raw_parts(buff as *const u8, *read_bytes as usize);
-            match drive_sfl(&mut s, chunk)? {
-                ReadAction::PassThru => {}
-                ReadAction::Swallow => {
-                    *read_bytes = 0;
+                if *read_bytes == 0 {
+                    return Ok(rf_ret);
                 }
-                ReadAction::Replace(s) => {
-                    ptr::copy_nonoverlapping(s.as_ptr(), buff as *mut u8, s.len());
-                    *read_bytes = s.len() as u32;
-                }
-                ReadAction::Append(s) => {
-                    if (len - *read_bytes) >= (s.len() as u32) {
-                        ptr::copy_nonoverlapping(
-                            s.as_ptr(),
-                            buff.offset(*read_bytes as isize) as *mut u8,
-                            s.len(),
-                        );
-                        *read_bytes += s.len() as u32;
+
+                // Not that InBuff is NOT circular either; ptr is "next value to be read",
+                // and cnt is "num of values left to read". On entry, "CommReceive", which
+                // is the immediate parent function of PReadFile, will move the unread part
+                // of InBuff to offset 0 and set InPtr to 0 (See "Compact buffer" comment).
+                // Trying to interfere with this by writing InBuff directly messes out
+                // terminal output, so we inject anything we want to write to the
+                // screen as the return value of our hook.
+                let chunk = slice::from_raw_parts(buff as *const u8, *read_bytes as usize);
+                match drive_sfl(&mut s, chunk)? {
+                    ReadAction::PassThru => {}
+                    ReadAction::Swallow => {
+                        *read_bytes = 0;
                     }
-                }
-                ReadAction::Prepend(s) => {
-                    if (len - *read_bytes) >= (s.len() as u32) {
-                        // XXX: Remove the last acknowledgment 'K' in the string. :)
-                        // Maybe I should make an "ReplaceFirstAndPrepend" action.
-                        *(buff as *mut u8) = b'\r';
-
-                        ptr::copy(buff, buff.offset(s.len() as isize), *read_bytes as usize);
+                    ReadAction::Replace(s) => {
                         ptr::copy_nonoverlapping(s.as_ptr(), buff as *mut u8, s.len());
-                        *read_bytes += s.len() as u32;
+                        *read_bytes = s.len() as u32;
+                    }
+                    ReadAction::Append(s) => {
+                        if (len - *read_bytes) >= (s.len() as u32) {
+                            ptr::copy_nonoverlapping(
+                                s.as_ptr(),
+                                buff.offset(*read_bytes as isize) as *mut u8,
+                                s.len(),
+                            );
+                            *read_bytes += s.len() as u32;
+                        }
+                    }
+                    ReadAction::Prepend(s) => {
+                        if (len - *read_bytes) >= (s.len() as u32) {
+                            // XXX: Remove the last acknowledgment 'K' in the string. :)
+                            // Maybe I should make an "ReplaceFirstAndPrepend" action.
+                            *(buff as *mut u8) = b'\r';
+
+                            ptr::copy(buff, buff.offset(s.len() as isize), *read_bytes as usize);
+                            ptr::copy_nonoverlapping(s.as_ptr(), buff as *mut u8, s.len());
+                            *read_bytes += s.len() as u32;
+                        }
                     }
                 }
-            }
 
-            Ok::<_, Error>(rf_ret)
-        })
-        .inspect_err(|e| error!(target: "our_p_read_file", "Failed to drive SFL FSM: {}", e))
-        .unwrap_or(rf_ret)
+                Ok::<_, Error>(rf_ret)
+            })
+            .inspect_err(|e| error!(target: "our_p_read_file", "Failed to drive SFL FSM: {}", e))
+            .unwrap_or(rf_ret)
+    }
 }
 
 fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<ReadAction, Error> {
@@ -265,23 +267,28 @@ fn inject_output(s: &mut State, buf: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
-pub unsafe extern "C" fn ttx_open_file(hooks: *mut tt::TTXFileHooks) {
-    TTX_LITEX_STATE.with_borrow_mut(|s| {
-        // SAFETY: Assumes TeraTerm passed us valid pointers.
-        s.orig_readfile = *(*hooks).PReadFile;
-        *(*hooks).PReadFile = Some(our_p_read_file);
 
-        trace!(target: "TTXOpenFile", "s.orig_readfile <= {:?} ({:?})", &raw const s.orig_readfile, s.orig_readfile);
-        trace!(target: "TTXOpenFile", "*(*hooks).PReadFile <= {:?}", our_p_read_file as * const ());
-    });
+ttx_export!{
+    pub unsafe fn ttx_open_file(hooks: *mut tt::TTXFileHooks) {
+        TTX_LITEX_STATE.with_borrow_mut(|s| {
+            // SAFETY: Assumes TeraTerm passed us valid pointers.
+            s.orig_readfile = *(*hooks).PReadFile;
+            *(*hooks).PReadFile = Some(our_p_read_file);
+
+            trace!(target: "TTXOpenFile", "s.orig_readfile <= {:?} ({:?})", &raw const s.orig_readfile, s.orig_readfile);
+            trace!(target: "TTXOpenFile", "*(*hooks).PReadFile <= {:?}", our_p_read_file as * const ());
+        });
+    }
 }
 
-pub unsafe extern "C" fn ttx_close_file(hooks: *mut tt::TTXFileHooks) {
-    TTX_LITEX_STATE.with_borrow_mut(|s| {
-        // SAFETY: Assumes TeraTerm passed us valid pointers, and that
-        // TeraTerm calls this function _after_ TTXOpenFile.
-        *(*hooks).PReadFile = s.orig_readfile;
+ttx_export!{
+    pub unsafe fn ttx_close_file(hooks: *mut tt::TTXFileHooks) {
+        TTX_LITEX_STATE.with_borrow_mut(|s| {
+            // SAFETY: Assumes TeraTerm passed us valid pointers, and that
+            // TeraTerm calls this function _after_ TTXOpenFile.
+            *(*hooks).PReadFile = s.orig_readfile;
 
-        trace!(target: "TTXCloseFile", "*(*hooks).PReadFile <= {:?}", *(*hooks).PReadFile);
-    });
+            trace!(target: "TTXCloseFile", "*(*hooks).PReadFile <= {:?}", *(*hooks).PReadFile);
+        });
+    }
 }

@@ -18,7 +18,7 @@ use windows::Win32::Foundation::*;
 // also run in a single thread. This variable is inaccessible outside plugin
 // context and is only accessed via Mutex. Therefore it is accessed only
 // by a single thread.
-unsafe impl Send for State {}
+// unsafe impl Send for State {}
 
 pub struct State {
     #[allow(unused)]

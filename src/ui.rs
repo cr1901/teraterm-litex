@@ -171,41 +171,45 @@ pub unsafe extern "system" fn litex_setup_dialog(
     return false.into();
 }
 
-pub unsafe extern "C" fn ttx_modify_menu(menu: HMENU) {
-    let file_menu = GetSubMenu(menu, tt::ID_FILE as i32);
-    // ID_TRANSFER == 9 in TeraTerm, and it doesn't work. Was the constant
-    // never updated?
-    let transfer_menu = GetSubMenu(file_menu, 11);
+ttx_export!{
+    pub unsafe fn ttx_modify_menu(menu: HMENU) {
+        let file_menu = GetSubMenu(menu, tt::ID_FILE as i32);
+        // ID_TRANSFER == 9 in TeraTerm, and it doesn't work. Was the constant
+        // never updated?
+        let transfer_menu = GetSubMenu(file_menu, 11);
 
-    let _ = AppendMenuW(
-        transfer_menu,
-        MF_ENABLED | MF_STRING,
-        ID_MENU_LITEX,
-        PCWSTR(u16cstr!("LiteX").as_ptr()),
-    );
+        let _ = AppendMenuW(
+            transfer_menu,
+            MF_ENABLED | MF_STRING,
+            ID_MENU_LITEX,
+            PCWSTR(u16cstr!("LiteX").as_ptr()),
+        );
+    }
 }
 
-pub unsafe extern "C" fn ttx_process_command(window: HWND, cmd: u16) -> i32 {
-    match cmd as usize {
-        ID_MENU_LITEX => {
-            debug!(target: "TTXProcessCommand", "LiteX option clicked.");
+ttx_export!{
+    pub unsafe fn ttx_process_command(window: HWND, cmd: u16) -> i32 {
+        match cmd as usize {
+            ID_MENU_LITEX => {
+                debug!(target: "TTXProcessCommand", "LiteX option clicked.");
 
-            let res = DialogBoxParamW(
-                Some(OUR_HINST.get()),
-                PCWSTR(IDD_SETUP_LITEX as *const u16),
-                Some(window),
-                Some(Some(litex_setup_dialog)),
-                LPARAM(0),
-            );
+                let res = DialogBoxParamW(
+                    Some(OUR_HINST.get()),
+                    PCWSTR(IDD_SETUP_LITEX as *const u16),
+                    Some(window),
+                    Some(Some(litex_setup_dialog)),
+                    LPARAM(0),
+                );
 
-            if res <= 0 {
-                debug!(target: "TTXProcessCommand", "Could not open LiteX dialog: {}", Error::WinError(GetLastError().into()))
+                if res <= 0 {
+                    debug!(target: "TTXProcessCommand", "Could not open LiteX dialog: {}", Error::WinError(GetLastError().into()))
+                }
+
+                return 1;
             }
-
-            return 1;
-        }
-        _ => {
-            return 0;
+            _ => {
+                return 0;
+            }
         }
     }
 }
