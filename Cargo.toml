@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["William D. Jones <thor0505@comcast.net>"]
 license-file = "LICENSE.md"
 edition = "2021"
+readme = "README.md"
 description = "Tera Term plugin that enables uploading files via LiteX"
 
 [lib]
