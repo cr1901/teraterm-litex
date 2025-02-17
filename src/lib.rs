@@ -1,7 +1,7 @@
 /*! TeraTerm LiteX Serial Flash Loader Plugin. */
 
 #[macro_use]
-mod teraterm;  // Order matters: https://stackoverflow.com/a/29069165
+mod teraterm; // Order matters: https://stackoverflow.com/a/29069165
 mod error;
 mod io;
 mod sfl;

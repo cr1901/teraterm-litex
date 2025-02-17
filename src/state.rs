@@ -31,7 +31,7 @@ pub struct State {
     pub filename: Option<PathBuf>,
     pub addr: u32,
     pub curr_frame: Option<Box<Frame>>,
-    pub file_size: Option<u64>
+    pub file_size: Option<u64>,
 }
 
 #[derive(PartialEq, Clone, Copy)]

@@ -101,8 +101,7 @@ impl<R> SflLoader<R> {
     pub fn halve_chunk_size(&mut self) {
         if self.chunk_size == 251 {
             self.chunk_size = 128;
-        }
-        else if self.chunk_size > 16 {
+        } else if self.chunk_size > 16 {
             self.chunk_size /= 2;
         }
     }

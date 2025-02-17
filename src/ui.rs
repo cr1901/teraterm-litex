@@ -171,7 +171,7 @@ pub unsafe extern "system" fn litex_setup_dialog(
     return false.into();
 }
 
-ttx_export!{
+ttx_export! {
     pub unsafe fn ttx_modify_menu(menu: HMENU) {
         let file_menu = GetSubMenu(menu, tt::ID_FILE as i32);
         // ID_TRANSFER == 9 in TeraTerm, and it doesn't work. Was the constant
@@ -187,7 +187,7 @@ ttx_export!{
     }
 }
 
-ttx_export!{
+ttx_export! {
     pub unsafe fn ttx_process_command(window: HWND, cmd: u16) -> i32 {
         match cmd as usize {
             ID_MENU_LITEX => {

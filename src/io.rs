@@ -163,23 +163,29 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<ReadAction, Error> {
             ))
         }
         Activity::Calibrate => {
-            let loader = s.sfl_loader.as_mut().expect(
-                "s.sfl_loader should have been initialized by Activity::LookForMagic",
-            );
+            let loader = s
+                .sfl_loader
+                .as_mut()
+                .expect("s.sfl_loader should have been initialized by Activity::LookForMagic");
 
-            let action = match Resp::try_from(chunk[0]).map_err(|_| Error::UnexpectedResponse(chunk[0]))? {
-                Resp::Success => {
-                    s.activity = Activity::WaitResp;
-                    let mut resp = String::new();
-                    let _ = write!(resp, "\x1B[0;36m[TTXLiteX] Using packet size: {} \x1B[0m\r\n", loader.chunk_size);
-                    Ok(ReadAction::Replace(resp))
-                }
-                _ => {
-                    info!(target: "drive_sfl", "Halved packet size.");
-                    loader.halve_chunk_size();
-                    Ok(ReadAction::Swallow)
-                }
-            };
+            let action =
+                match Resp::try_from(chunk[0]).map_err(|_| Error::UnexpectedResponse(chunk[0]))? {
+                    Resp::Success => {
+                        s.activity = Activity::WaitResp;
+                        let mut resp = String::new();
+                        let _ = write!(
+                            resp,
+                            "\x1B[0;36m[TTXLiteX] Using packet size: {} \x1B[0m\r\n",
+                            loader.chunk_size
+                        );
+                        Ok(ReadAction::Replace(resp))
+                    }
+                    _ => {
+                        info!(target: "drive_sfl", "Halved packet size.");
+                        loader.halve_chunk_size();
+                        Ok(ReadAction::Swallow)
+                    }
+                };
 
             // Resend frame 0 with final packet size to cleanly separate
             // calibration and send modes.
@@ -187,7 +193,7 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<ReadAction, Error> {
                 .encode_data_frame(0)
                 .map_err(|e| Error::FileIoError(e))?
                 .expect("input file should've been verified to be non-empty at this point");
-            
+
             inject_output(s, frame.as_bytes())?;
             action
         }
@@ -229,7 +235,6 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<ReadAction, Error> {
 
                             let mut bar = String::with_capacity(BAR_LENGTH as usize);
 
-                            
                             for _ in 0..used_part {
                                 bar.push('=');
                             }
@@ -242,9 +247,15 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<ReadAction, Error> {
                             for _ in (used_part + 1)..BAR_LENGTH {
                                 bar.push(' ');
                             }
-        
+
                             let mut resp = String::new();
-                            let _ = write!(&mut resp, "\r\x1B[0;36m[TTXLiteX] |{}| {} / {} chunks\x1B[0m", bar, s.last_frame_acked.unwrap() + 1, total_chunks);
+                            let _ = write!(
+                                &mut resp,
+                                "\r\x1B[0;36m[TTXLiteX] |{}| {} / {} chunks\x1B[0m",
+                                bar,
+                                s.last_frame_acked.unwrap() + 1,
+                                total_chunks
+                            );
                             Ok(ReadAction::Replace(resp))
                         }
                         None => {
@@ -337,8 +348,7 @@ fn inject_output(s: &mut State, buf: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
-
-ttx_export!{
+ttx_export! {
     pub unsafe fn ttx_open_file(hooks: *mut tt::TTXFileHooks) {
         TTX_LITEX_STATE.with_borrow_mut(|s| {
             // SAFETY: Assumes TeraTerm passed us valid pointers.
@@ -351,7 +361,7 @@ ttx_export!{
     }
 }
 
-ttx_export!{
+ttx_export! {
     pub unsafe fn ttx_close_file(hooks: *mut tt::TTXFileHooks) {
         TTX_LITEX_STATE.with_borrow_mut(|s| {
             // SAFETY: Assumes TeraTerm passed us valid pointers, and that
