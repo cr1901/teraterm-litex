@@ -59,6 +59,7 @@ fmt-fix:
     cargo fix --allow-dirty
     git commit -am "cargo fmt. cargo fix."
 
+# Install the 32-bit MSVC Rust compiler, required for releases.
 prereq-32-msvc:
     rustup toolchain install stable-i686-msvc
 
@@ -74,6 +75,19 @@ wix-init-32-msvc:
     cargo +stable-i686-msvc wix init --force --license wix/License.rtf
 
 # Create installers for TeraTerm 4 and 5.
-wix-msi-32-msvc:
-    cargo +stable-i686-msvc wix -C '-dTTX_LITEX_TERATERM5=1' --target i686-pc-windows-msvc -vo target/i686-pc-windows-msvc/wix/tt5-litex-i686.msi --nocapture
-    cargo +stable-i686-msvc wix --target i686-pc-windows-msvc -vo target/i686-pc-windows-msvc/wix/tt-litex-i686.msi
+wix-msi-32-msvc VERSION="":
+    cargo +stable-i686-msvc wix -C '-dTTX_LITEX_TERATERM5=1' --target i686-pc-windows-msvc -vo target/i686-pc-windows-msvc/wix/tt5-litex{{VERSION}}-i686.msi
+    cargo +stable-i686-msvc wix --target i686-pc-windows-msvc -vo target/i686-pc-windows-msvc/wix/tt-litex{{VERSION}}-i686.msi
+
+# Create zip file of release assets.
+prepare-release-zip VERSION="":
+    rm -rf tt-litex{{VERSION}}
+    mkdir tt-litex{{VERSION}}
+    mkdir tt-litex{{VERSION}}/assets
+    cp CHANGELOG.md tt-litex{{VERSION}}
+    cp README.md tt-litex{{VERSION}}
+    cp LICENSE.md tt-litex{{VERSION}}
+    cp assets/*.* tt-litex{{VERSION}}/assets
+    cp target/i686-pc-windows-msvc/wix/*.msi tt-litex{{VERSION}}
+    cp target/i686-pc-windows-msvc/release/TTXLiteX.dll tt-litex{{VERSION}}
+    zip -r tt-litex{{VERSION}}.zip tt-litex{{VERSION}}/*

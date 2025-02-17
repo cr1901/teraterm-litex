@@ -20,7 +20,7 @@ and does not necessarily reflect the fonts/glyphs used by Tera Term.
 
 ![GIF of a sample session uploading the LiteX demo firmware via the LiteX BIOS
  using my Tera Term LiteX plugin. I then run the first frame of a demo that
- prints an 3D donut rendered using ASCII characters.](assets/demo.gif)
+ prints a 3D donut rendered using ASCII characters.](assets/demo.gif)
 
 ## Installation
 There are two installers; the DLL is identical in each except for default
@@ -40,15 +40,15 @@ Once you start Tera Term after installation, you will be greeted with a new
 file transfer option called "LiteX" under the File > Transfer submenu:
 
 ![Picture of a Tera Term session showing a mouse cursor highlighted over the
-  File > Transfer > LiteX submenu](assets/TqRBnncyeJ.png)
+  File > Transfer > LiteX submenu.](assets/TqRBnncyeJ.png)
 
 When you click "LiteX" under the File > Transfer submenu, you will be greeted
 with the following dialog:
 
-![Picture of the LiteX file dialog that opens when clicking the aformentioned
+![Picture of the LiteX file dialog that opens when clicking the aforementioned
   LiteX submenu. There are text edit controls for adding a firmware file
   (named "File") and a boot address (named "Boot Address"). Additionally, to
-  the right of these text edits, there is a button with elipses and an unchecked
+  the right of these text edits, there is a button with ellipses and an unchecked
   checkbox called "Active". A Tera Term session is in the background.](assets/ttermpro_Bkg4qsDMaR.png)
 
 The "File" and "Boot Address" text edits correspond to the `--kernel` and
