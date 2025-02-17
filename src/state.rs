@@ -37,7 +37,7 @@ pub struct State {
 pub enum Activity {
     Inactive,
     LookForMagic,
-    // WritePacket,
+    Calibrate,
     WaitResp,
     WaitFinalResp,
 }

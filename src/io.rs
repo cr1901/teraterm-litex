@@ -150,13 +150,38 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<ReadAction, Error> {
             // inject_output(s, next_data_frame(s)?.unwrap().as_bytes())?;
 
             s.sfl_loader = Some(loader);
-            s.activity = Activity::WaitResp;
+            s.activity = Activity::Calibrate;
             s.curr_frame = Some(frame);
             s.last_frame_sent = Some(0);
 
             Ok(ReadAction::Append(
                 "\r\x1B[0;36m[TTXLiteX] Uploading File\x1B[0m ".to_string(),
             ))
+        }
+        Activity::Calibrate => {
+            let loader = s.sfl_loader.as_mut().expect(
+                "s.sfl_loader should have been initialized by Activity::LookForMagic",
+            );
+
+            match Resp::try_from(chunk[0]).map_err(|_| Error::UnexpectedResponse(chunk[0]))? {
+                Resp::Success => {
+                    s.activity = Activity::WaitResp;
+                }
+                _ => {
+                    info!(target: "drive_sfl", "Halved packet size.");
+                    loader.halve_chunk_size();
+                }
+            }
+
+            // Resend frame 0 with final packet size to cleanly separate
+            // calibration and send modes.
+            let frame = loader
+                .encode_data_frame(0)
+                .map_err(|e| Error::FileIoError(e))?
+                .expect("input file should've been verified to be non-empty at this point");
+            
+            inject_output(s, frame.as_bytes())?;
+            Ok(ReadAction::Swallow)
         }
         Activity::WaitResp => {
             match Resp::try_from(chunk[0]).map_err(|_| Error::UnexpectedResponse(chunk[0]))? {

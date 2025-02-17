@@ -98,6 +98,15 @@ impl<R> SflLoader<R> {
         }
     }
 
+    pub fn halve_chunk_size(&mut self) {
+        if self.chunk_size == 251 {
+            self.chunk_size = 128;
+        }
+        else if self.chunk_size > 16 {
+            self.chunk_size /= 2;
+        }
+    }
+
     pub fn encode_data_frame(&mut self, frame_num: u32) -> Result<Option<Box<Frame>>, io::Error>
     where
         R: Read + Seek,
