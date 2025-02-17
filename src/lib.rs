@@ -117,6 +117,7 @@ ttx_export! {
             filename,
             addr,
             curr_frame: None,
+            file_size: None
         });
     }
 }

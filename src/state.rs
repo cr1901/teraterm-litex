@@ -31,6 +31,7 @@ pub struct State {
     pub filename: Option<PathBuf>,
     pub addr: u32,
     pub curr_frame: Option<Box<Frame>>,
+    pub file_size: Option<u64>
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -55,6 +56,7 @@ thread_local! {
         last_frame_sent: None,
         filename: None,
         addr: 0x40000000,
-        curr_frame: None
+        curr_frame: None,
+        file_size: None
     });
 }

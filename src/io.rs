@@ -126,12 +126,15 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<ReadAction, Error> {
             let mut loader = File::open(filename)
                 .map_err(|e| Error::FileIoError(e))
                 .and_then(|fp| {
-                    if fp.metadata().map_err(|e| Error::FileIoError(e))?.len() == 0 {
+                    let size = fp.metadata().map_err(|e| Error::FileIoError(e))?.len();
+
+                    if size == 0 {
                         return Err(Error::FileIoError(io::Error::new(
                             io::ErrorKind::UnexpectedEof,
                             "input file was empty",
                         )));
                     } else {
+                        s.file_size = Some(size);
                         Ok(fp)
                     }
                 })
@@ -199,8 +202,9 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<ReadAction, Error> {
                     let loader = s.sfl_loader.as_mut().expect(
                         "s.sfl_loader should have been initialized by Activity::LookForMagic",
                     );
+                    let chunk_size = loader.chunk_size;
 
-                    match loader
+                    let action = match loader
                         .encode_data_frame(next_frame)
                         .map_err(|e| Error::FileIoError(e))?
                     {
@@ -209,6 +213,39 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<ReadAction, Error> {
                             inject_output(s, frame.as_bytes())?;
                             s.curr_frame = Some(frame);
                             s.last_frame_sent = Some(next_frame + 1);
+
+                            // This prints one too many times if not
+                            // conditional on current packet.
+                            let file_size = s.file_size.expect("s.file_size should have been initialized by Activity::LookForMagic");
+                            let mut total_chunks = file_size / (chunk_size as u64);
+                            let rem = file_size % (chunk_size as u64);
+                            if rem != 0 {
+                                total_chunks += 1;
+                            }
+
+                            const BAR_LENGTH: u64 = 40;
+                            let chunk_no = (s.last_frame_acked.unwrap() + 1) as u64;
+                            let used_part = (BAR_LENGTH * chunk_no) / total_chunks;
+
+                            let mut bar = String::with_capacity(BAR_LENGTH as usize);
+
+                            
+                            for _ in 0..used_part {
+                                bar.push('=');
+                            }
+
+                            // Arrow goes away once 100% loaded!
+                            if used_part != BAR_LENGTH {
+                                bar.push('>');
+                            }
+
+                            for _ in (used_part + 1)..BAR_LENGTH {
+                                bar.push(' ');
+                            }
+        
+                            let mut resp = String::new();
+                            let _ = write!(&mut resp, "\r\x1B[0;36m[TTXLiteX] |{}| {} / {} chunks\x1B[0m", bar, s.last_frame_acked.unwrap() + 1, total_chunks);
+                            Ok(ReadAction::Replace(resp))
                         }
                         None => {
                             let frame = loader.encode_boot_frame(s.addr);
@@ -216,10 +253,12 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<ReadAction, Error> {
                             inject_output(s, frame.as_bytes())?;
                             s.curr_frame = Some(frame);
                             s.activity = Activity::WaitFinalResp;
-                        }
-                    }
 
-                    Ok(ReadAction::Replace(".".to_string()))
+                            Ok(ReadAction::Swallow)
+                        }
+                    };
+
+                    action
                 }
                 err @ (Resp::CrcError | Resp::Unknown | Resp::AckError) => {
                     redo_last_frame(s, err).map(|_| ReadAction::Swallow)
@@ -229,6 +268,7 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<ReadAction, Error> {
         Activity::WaitFinalResp => {
             match Resp::try_from(chunk[0]).map_err(|_| Error::UnexpectedResponse(chunk[0]))? {
                 Resp::Success => {
+                    s.file_size = None;
                     s.last_frame_acked = None;
                     s.last_frame_sent = None;
                     s.activity = Activity::LookForMagic;
