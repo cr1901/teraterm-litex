@@ -59,9 +59,21 @@ fmt-fix:
     cargo fix --allow-dirty
     git commit -am "cargo fmt. cargo fix."
 
+prereq-32-msvc:
+    rustup toolchain install stable-i686-msvc
+
 # Requires "rustup toolchain install stable-i686-msvc".
 # Must be from from a x86 Native Tools Command Prompt, because otherwise the
 # GNU Resource Compiler might be called during the build script.
 # Build release DLL for 32-bit MSVC, which matches TeraTerm releases.
 build-32-msvc:
     cargo +stable-i686-msvc build --release --target i686-pc-windows-msvc
+
+# Initialize installer XML.
+wix-init-32-msvc:
+    cargo +stable-i686-msvc wix init --force --license wix/License.rtf
+
+# Create installers for TeraTerm 4 and 5.
+wix-msi-32-msvc:
+    cargo +stable-i686-msvc wix -C '-dTTX_LITEX_TERATERM5=1' --target i686-pc-windows-msvc -vo target/i686-pc-windows-msvc/wix/tt5-litex-i686.msi --nocapture
+    cargo +stable-i686-msvc wix --target i686-pc-windows-msvc -vo target/i686-pc-windows-msvc/wix/tt-litex-i686.msi
