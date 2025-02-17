@@ -2,6 +2,7 @@
 
 use core::slice;
 use std::ffi::c_void;
+use std::fmt::Write;
 use std::fs::File;
 use std::{io, ptr};
 
@@ -155,7 +156,7 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<ReadAction, Error> {
             s.last_frame_sent = Some(0);
 
             Ok(ReadAction::Append(
-                "\r\x1B[0;36m[TTXLiteX] Uploading File\x1B[0m ".to_string(),
+                "\r\x1B[0;36m[TTXLiteX] Uploading File\x1B[0m\r\n".to_string(),
             ))
         }
         Activity::Calibrate => {
@@ -163,15 +164,19 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<ReadAction, Error> {
                 "s.sfl_loader should have been initialized by Activity::LookForMagic",
             );
 
-            match Resp::try_from(chunk[0]).map_err(|_| Error::UnexpectedResponse(chunk[0]))? {
+            let action = match Resp::try_from(chunk[0]).map_err(|_| Error::UnexpectedResponse(chunk[0]))? {
                 Resp::Success => {
                     s.activity = Activity::WaitResp;
+                    let mut resp = String::new();
+                    let _ = write!(resp, "\x1B[0;36m[TTXLiteX] Using packet size: {} \x1B[0m\r\n", loader.chunk_size);
+                    Ok(ReadAction::Replace(resp))
                 }
                 _ => {
                     info!(target: "drive_sfl", "Halved packet size.");
                     loader.halve_chunk_size();
+                    Ok(ReadAction::Swallow)
                 }
-            }
+            };
 
             // Resend frame 0 with final packet size to cleanly separate
             // calibration and send modes.
@@ -181,7 +186,7 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<ReadAction, Error> {
                 .expect("input file should've been verified to be non-empty at this point");
             
             inject_output(s, frame.as_bytes())?;
-            Ok(ReadAction::Swallow)
+            action
         }
         Activity::WaitResp => {
             match Resp::try_from(chunk[0]).map_err(|_| Error::UnexpectedResponse(chunk[0]))? {

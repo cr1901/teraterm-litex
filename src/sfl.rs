@@ -76,7 +76,7 @@ pub struct SflLoader<R> {
     base: u32,
     #[allow(unused)]
     offs: usize,
-    chunk_size: u16,
+    pub chunk_size: u16,
 }
 
 impl SflLoader<File> {
