@@ -11,6 +11,9 @@ permissions:
 
 jobs:
   build:
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v4
@@ -25,8 +28,15 @@ jobs:
     # https://github.com/ilammy/msvc-dev-cmd?tab=readme-ov-file#name-conflicts-with-shell-bash
     - name: Remove GNU link
       run: sh -c 'rm /usr/bin/link'
+    - name: Run sccache-cache
+      uses: mozilla-actions/sccache-action@v0.0.7
     - name: Build DLL
       run: just build-32-msvc
+    # No cargo wix action, and the markdown-extract action is Linux-only :(...
+    - name: Inject sccache Vars
+      run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
     - name: Create MSI
       if: runner.os == 'Windows'
       run: |
@@ -38,17 +48,16 @@ jobs:
     - name: Make ZIP file
       if: ${{ runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/v') }}
       run: just prepare-release-zip "-${{github.ref_name}}"
-    - id: extract-changelog
-      name: Extract Release Notes From CHANGELOG.md
-      uses: sean0x42/markdown-extract@v2.1.0
-      with:
-       file: crates/markdown-extract/CHANGELOG.md
-       pattern: ${{github.ref_name}}
+    - name: Extract Release Notes From CHANGELOG.md
+      if: ${{ runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/v') }}
+      run: |
+          cargo install markdown-extract-cli
+          markdown-extract [${{github.ref_name}}] CHANGELOG.md > CHANGELOG-extracted.md
     - name: Release
       uses: softprops/action-gh-release@v2
       if: ${{ runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/v') }}
       with:
-          body: ${{ steps.extract-changelog.outputs.markdown }}
+          body_path: CHANGELOG-extracted.md
           files: |
             target/i686-pc-windows-msvc/wix/*.msi
             tt-litex-${{github.ref_name}}.zip
