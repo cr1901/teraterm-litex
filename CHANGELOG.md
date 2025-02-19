@@ -30,5 +30,6 @@ Initial release.
   * Does a command-response lockstep send/receive with the device to send
     over a firmware at the device CPU address supplied by the dialog.
 
-[Unreleased]: https://github.com/cr1901/teraterm-litex/compare/v0.1.0..HEAD
+[Unreleased]: https://github.com/cr1901/teraterm-litex/compare/v0.1.1..HEAD
+[0.1.1]: https://github.com/cr1901/teraterm-litex/releases/tag/v0.1.1
 [0.1.0]: https://github.com/cr1901/teraterm-litex/releases/tag/v0.1.0

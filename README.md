@@ -1,4 +1,10 @@
 # Tera Term 4/5 Plugin for LiteX Serial Flash Loader (SFL) Protocol
+[![Build Status](https://github.com/cr1901/teraterm-litex/actions/workflows/build.yml/badge.svg)](https://github.com/cr1901/teraterm-litex/actions/workflows/build.yml)
+[![Latest Version](https://img.shields.io/github/v/release/cr1901/teraterm-litex)](https://github.com/cr1901/teraterm-litex/releases/latest)
+[![GitHub License](https://img.shields.io/github/license/cr1901/teraterm-litex)](https://github.com/cr1901/teraterm-litex/blob/main/LICENSE.md)
+[![Contact Me](https://img.shields.io/twitter/follow/cr1901.svg?label=Contact%20Me&&style=social)](https://twitter.com/cr1901)
+[![Contact Me (Mastodon)](https://img.shields.io/mastodon/follow/11500?style=social&label=Contact%20Me%20(%40cr1901))](https://mastodon.social/@cr1901/)
+
 
 Tera Term is a mature and still developed Open Source Terminal Emulator for
 Windows. It has its roots in the Windows 3.x days, and has been rewritten from
