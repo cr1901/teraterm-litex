@@ -12,6 +12,7 @@ use std::fs::File;
 use std::path::PathBuf;
 
 use std::ptr;
+use std::time::Instant;
 
 use super::sfl::{self, Frame, MagicMatcher, SflLoader};
 use super::tt;
@@ -32,6 +33,7 @@ pub struct State {
     pub addr: u32,
     pub curr_frame: Option<Box<Frame>>,
     pub file_size: Option<u64>,
+    pub start_time: Option<Instant>
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -57,6 +59,7 @@ thread_local! {
         filename: None,
         addr: 0x40000000,
         curr_frame: None,
-        file_size: None
+        file_size: None,
+        start_time: None
     });
 }

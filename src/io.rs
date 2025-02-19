@@ -5,15 +5,15 @@ use std::ffi::c_void;
 use std::fmt::Write;
 use std::fs::File;
 use std::{io, ptr};
+use std::time::Instant;
 
-use crate::sfl::SflLoader;
-
-use super::sfl::{Resp, MAGIC_RESPONSE};
+use super::sfl::{Resp, MAGIC_RESPONSE, SflLoader};
 use super::state::{Activity, State, TTX_LITEX_STATE};
 use super::tt;
 use super::Error;
-use log::*;
 
+use log::*;
+use pretty_bytes_typed::pretty_bytes;
 use windows::Win32::System::IO::OVERLAPPED;
 
 enum ReadAction {
@@ -197,6 +197,7 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<ReadAction, Error> {
             s.activity = Activity::Calibrate;
             s.curr_frame = Some(frame);
             s.last_frame_sent = Some(0);
+            s.start_time = Some(Instant::now());
 
             Ok(ReadAction::Append(
                 "\r\x1B[0;36m[TTXLiteX] Uploading File\x1B[0m\r\n".to_string(),
@@ -279,14 +280,20 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<ReadAction, Error> {
         Activity::WaitFinalResp => {
             match Resp::try_from(chunk[0]).map_err(|_| Error::UnexpectedResponse(chunk[0]))? {
                 Resp::Success => {
+                    let file_size = s.file_size.expect("s.file_size should have been initialized by Activity::LookForMagic") as f64;
+
                     s.file_size = None;
                     s.last_frame_acked = None;
                     s.last_frame_sent = None;
                     s.activity = Activity::LookForMagic;
 
-                    Ok(ReadAction::Prepend(
-                        "\r\n\x1B[0;36m[TTXLiteX] Done!\x1B[0m\r\n\r\n".to_string(),
-                    ))
+                    let elapsed = (Instant::now() - s.start_time.unwrap()).as_secs_f64();
+                    let rate = file_size / elapsed;
+
+                    let mut resp = String::new();
+                    let _ = write!(resp, "\r\n\x1B[0;36m[TTXLiteX] Done! ({}/s)\x1B[0m\r\n\r\n", pretty_bytes(rate as u64, Some(2)));
+
+                    Ok(ReadAction::Prepend(resp))
                 }
                 err @ (Resp::CrcError | Resp::Unknown | Resp::AckError) => {
                     redo_last_frame(s, err).map(|_| ReadAction::Swallow)

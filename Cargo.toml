@@ -19,6 +19,7 @@ crc = "3.2.1"
 log = { version = "0.4.25", default-features = false }
 once_cell = "1.20.3"
 parse_int = "0.6.0"
+pretty-bytes-typed = "0.2.0"
 rfd = { version = "0.15.2", default-features = false }
 stderrlog = { version = "0.6.0", default-features = false }
 widestring = "1.1.0"
