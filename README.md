@@ -2,8 +2,11 @@
 [![Build Status](https://github.com/cr1901/teraterm-litex/actions/workflows/build.yml/badge.svg)](https://github.com/cr1901/teraterm-litex/actions/workflows/build.yml)
 [![Latest Version](https://img.shields.io/github/v/release/cr1901/teraterm-litex)](https://github.com/cr1901/teraterm-litex/releases/latest)
 [![GitHub License](https://img.shields.io/github/license/cr1901/teraterm-litex)](https://github.com/cr1901/teraterm-litex/blob/main/LICENSE.md)
-[![Contact Me](https://img.shields.io/twitter/follow/cr1901.svg?label=Contact%20Me&&style=social)](https://twitter.com/cr1901)
-[![Contact Me (Mastodon)](https://img.shields.io/mastodon/follow/11500?style=social&label=Contact%20Me%20(%40cr1901))](https://mastodon.social/@cr1901/)
+
+[![Contact Me](https://img.shields.io/badge/Contact%20Me-socials-blue)](https://www.wdj-consulting.com/about/#contact-info)
+[![Twitter](https://img.shields.io/twitter/follow/cr1901.svg?label=Twitter&style=social)](https://twitter.com/cr1901)
+[![Mastodon](https://img.shields.io/mastodon/follow/11500?style=social&label=Mastodon)](https://mastodon.social/@cr1901/)
+[![Bluesky](https://img.shields.io/badge/Bluesky-0285FF?style=sociale&logo=Bluesky&logoColor=white)](https://bsky.app/profile/cr1901.bsky.social)
 
 
 Tera Term is a mature and still developed Open Source Terminal Emulator for
