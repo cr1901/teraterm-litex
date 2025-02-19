@@ -33,7 +33,7 @@ pub struct State {
     pub addr: u32,
     pub curr_frame: Option<Box<Frame>>,
     pub file_size: Option<u64>,
-    pub start_time: Option<Instant>
+    pub start_time: Option<Instant>,
 }
 
 #[derive(PartialEq, Clone, Copy)]

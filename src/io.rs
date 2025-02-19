@@ -4,10 +4,10 @@ use core::slice;
 use std::ffi::c_void;
 use std::fmt::Write;
 use std::fs::File;
-use std::{io, ptr};
 use std::time::Instant;
+use std::{io, ptr};
 
-use super::sfl::{Resp, MAGIC_RESPONSE, SflLoader};
+use super::sfl::{Resp, SflLoader, MAGIC_RESPONSE};
 use super::state::{Activity, State, TTX_LITEX_STATE};
 use super::tt;
 use super::Error;
@@ -110,8 +110,14 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<ReadAction, Error> {
     }
 
     fn status_bar(s: &State) -> String {
-        let chunk_size = s.sfl_loader.as_ref().expect("s.sfl_loader should have been initialized by Activity::LookForMagic").chunk_size;
-        let file_size = s.file_size.expect("s.file_size should have been initialized by Activity::LookForMagic");
+        let chunk_size = s
+            .sfl_loader
+            .as_ref()
+            .expect("s.sfl_loader should have been initialized by Activity::LookForMagic")
+            .chunk_size;
+        let file_size = s
+            .file_size
+            .expect("s.file_size should have been initialized by Activity::LookForMagic");
         let mut total_chunks = file_size / (chunk_size as u64);
         let rem = file_size % (chunk_size as u64);
         if rem != 0 {
@@ -280,7 +286,9 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<ReadAction, Error> {
         Activity::WaitFinalResp => {
             match Resp::try_from(chunk[0]).map_err(|_| Error::UnexpectedResponse(chunk[0]))? {
                 Resp::Success => {
-                    let file_size = s.file_size.expect("s.file_size should have been initialized by Activity::LookForMagic") as f64;
+                    let file_size = s.file_size.expect(
+                        "s.file_size should have been initialized by Activity::LookForMagic",
+                    ) as f64;
 
                     s.file_size = None;
                     s.last_frame_acked = None;
@@ -291,7 +299,11 @@ fn drive_sfl(s: &mut State, chunk: &[u8]) -> Result<ReadAction, Error> {
                     let rate = file_size / elapsed;
 
                     let mut resp = String::new();
-                    let _ = write!(resp, "\r\n\x1B[0;36m[TTXLiteX] Done! ({}/s)\x1B[0m\r\n\r\n", pretty_bytes(rate as u64, Some(2)));
+                    let _ = write!(
+                        resp,
+                        "\r\n\x1B[0;36m[TTXLiteX] Done! ({}/s)\x1B[0m\r\n\r\n",
+                        pretty_bytes(rate as u64, Some(2))
+                    );
 
                     Ok(ReadAction::Prepend(resp))
                 }
