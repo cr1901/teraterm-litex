@@ -30,10 +30,16 @@ jobs:
       run: sh -c 'rm /usr/bin/link'
     - name: Run sccache-cache
       uses: mozilla-actions/sccache-action@v0.0.7
+    - name: Inject sccache Vars (Early)
+      if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+      run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
     - name: Build DLL
       run: just build-32-msvc
     # No cargo wix action, and the markdown-extract action is Linux-only :(...
-    - name: Inject sccache Vars
+    - name: Inject sccache Vars (Late)
+      if: ${{ startsWith(github.ref, 'refs/tags/v') }}
       run: |
           echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
           echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV

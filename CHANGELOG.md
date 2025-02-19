@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.1] - 2025-02-18
 ### Added
 - Generate release notes from CHANGELOG.md.
+- Cache build artifacts to speed up CI.
 
 ### Fixed
 - Fix sending the initial packet one more time than necessary (even after ACK).
