@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2025-02-18
+### Added
+- Print out upload rate when transfer is done.
+
+### Changed
+- Move SFL implementation into its own hierarchy/directory, to prepare for
+  a better `SflLoader` implementation. Also helps in case I decide to extend
+  the plugin later.
+
 ## [0.1.1] - 2025-02-18
 ### Added
 - Generate release notes from CHANGELOG.md.
@@ -31,6 +40,7 @@ Initial release.
   * Does a command-response lockstep send/receive with the device to send
     over a firmware at the device CPU address supplied by the dialog.
 
-[Unreleased]: https://github.com/cr1901/teraterm-litex/compare/v0.1.1..HEAD
+[Unreleased]: https://github.com/cr1901/teraterm-litex/compare/v0.1.2..HEAD
+[0.1.1]: https://github.com/cr1901/teraterm-litex/releases/tag/v0.1.2
 [0.1.1]: https://github.com/cr1901/teraterm-litex/releases/tag/v0.1.1
 [0.1.0]: https://github.com/cr1901/teraterm-litex/releases/tag/v0.1.0
